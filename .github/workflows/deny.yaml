@@ -8,7 +8,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 最新のstable Rustをインストール
-      - uses: dtolnay/rust-toolchain@stable
-
       - uses: EmbarkStudios/cargo-deny-action@v2
