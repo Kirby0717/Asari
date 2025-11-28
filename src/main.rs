@@ -1,3 +1,5 @@
+mod parse;
+
 fn main() -> anyhow::Result<()> {
     welcome();
 
@@ -9,7 +11,10 @@ fn main() -> anyhow::Result<()> {
         let mut line = String::new();
         match stdin.read_line(&mut line) {
             Ok(_len) => {
-                println!("{line:?}");
+                use winnow::Parser;
+                let line = line.trim().to_string();
+                let parsed = parse::command.parse(line.as_str());
+                println!("{parsed:?}");
             }
             Err(e) => {
                 eprintln!("err: {e}");
