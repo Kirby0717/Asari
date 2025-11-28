@@ -11,4 +11,4 @@ jobs:
       # 最新のstable Rustをインストール
       - uses: dtolnay/rust-toolchain@stable
 
-      - uses: EmbarkStudios/cargo-deny-action@v1
+      - uses: EmbarkStudios/cargo-deny-action@v2
