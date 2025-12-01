@@ -61,8 +61,6 @@ fn escape_char(input: &mut &str) -> ModalResult<char> {
             '\"' => empty.value('\"'),
             '\'' => empty.value('\''),
             '0' => empty.value('\0'),
-            '~' => empty.value('~'),
-            '$' => empty.value('$'),
             _ => cut_err(fail)
         ),
     )
@@ -126,10 +124,9 @@ fn path_string(input: &mut &str) -> ModalResult<String> {
     Ok(raw.to_string())
 }
 fn unquoted_string(input: &mut &str) -> ModalResult<String> {
-    take_till(
-        1..,
-        (' ', '#', '$', '(', ')', '{', '}', '|', '<', '>', ';', '&'),
-    )
+    take_till(1.., |c: char| {
+        c.is_whitespace() || "#$(){}|<>;&".contains(c)
+    })
     .map(str::to_string)
     .parse_next(input)
 }
