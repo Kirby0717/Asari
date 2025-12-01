@@ -5,7 +5,7 @@ use winnow::{
         preceded, repeat, terminated, todo as todo_parser,
     },
     prelude::*,
-    token::{any, take_while},
+    token::{any, take_till, take_until, take_while},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -15,22 +15,12 @@ pub struct Command {
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Word {
-    Literal(Literal),
-    Variable(Variable),
+    Literal(String),
+    // とりあえずStringで
+    PathLiteral(String),
+    //Variable(Variable),
 }
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Literal {
-    tilde: Option<Tilde>,
-    literal: String,
-}
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Tilde {
-    Home,         // ~ （自分のホーム）
-    User(String), // ~username
-    Pwd,          // ~+
-    OldPwd,       // ~-
-}
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+/*#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Variable {
     Named(String),     // $VAR, ${VAR}
     ExitStatus,        // $?
@@ -40,7 +30,7 @@ pub enum Variable {
     ArgCount,          // $#
     AllArgs,           // $@
     AllArgsStr,        // $*
-}
+}*/
 
 fn space0(input: &mut &str) -> ModalResult<String> {
     take_while(0.., char::is_whitespace)
@@ -53,7 +43,7 @@ fn space1(input: &mut &str) -> ModalResult<String> {
         .parse_next(input)
 }
 fn unicode_number(input: &mut &str) -> ModalResult<char> {
-    take_while(1..=6, ('0'..='9'))
+    take_while(1..=6, (('0'..='9'), ('A'..='F'), ('a'..='f')))
         .verify_map(|num: &str| {
             u32::from_str_radix(num, 16).ok().and_then(char::from_u32)
         })
@@ -88,43 +78,64 @@ pub fn command(input: &mut &str) -> ModalResult<Command> {
 
 pub fn word(input: &mut &str) -> ModalResult<Word> {
     dispatch!(peek(any);
-        '\'' => delimited('\'', quoted_string, '\'').map(Word::Literal),
-        '\"' => delimited('\"', double_quoted_string, '\"').map(Word::Literal),
-        '$' => variable.map(Word::Variable),
-        _ => unquoted_string.map(Word::Literal)
+        '\'' => quoted_string.map(Word::Literal),
+        '"' => double_quoted_string.map(Word::Literal),
+        //'$' => variable.map(Word::Variable),
+        _ => alt((
+            raw_string.map(Word::Literal),
+            path_string.map(Word::PathLiteral),
+            unquoted_string.map(Word::Literal),
+        ))
     )
     .parse_next(input)
 }
-fn tilde(input: &mut &str) -> ModalResult<Tilde> {
-    // とりあえず単体チルダのみ解析
-    let _tilde = '~'.parse_next(input)?;
-    Ok(Tilde::Home)
+fn quoted_string(input: &mut &str) -> ModalResult<String> {
+    const DELIMITER: char = '\'';
+    delimited(
+        DELIMITER,
+        repeat(0.., alt((escape_char, any.verify(|c| *c != DELIMITER)))),
+        DELIMITER,
+    )
+    .parse_next(input)
 }
-fn quoted_string(input: &mut &str) -> ModalResult<Literal> {
-    Ok(Literal {
-        tilde: opt(tilde).parse_next(input)?,
-        literal: repeat(0.., alt((escape_char, any.verify(|c| *c != '\''))))
-            .parse_next(input)?,
-    })
+fn double_quoted_string(input: &mut &str) -> ModalResult<String> {
+    const DELIMITER: char = '\"';
+    delimited(
+        DELIMITER,
+        repeat(0.., alt((escape_char, any.verify(|c| *c != DELIMITER)))),
+        DELIMITER,
+    )
+    .parse_next(input)
 }
-fn double_quoted_string(input: &mut &str) -> ModalResult<Literal> {
-    Ok(Literal {
-        tilde: opt(tilde).parse_next(input)?,
-        literal: repeat(0.., alt((escape_char, any.verify(|c| *c != '\"'))))
-            .parse_next(input)?,
-    })
+fn raw_string(input: &mut &str) -> ModalResult<String> {
+    let _ = 'r'.parse_next(input)?;
+    let sharp = take_while(0.., '#').parse_next(input)?;
+    let _ = '"'.parse_next(input)?;
+    let delimiter = '"'.to_string() + sharp;
+    let raw = take_until(0.., delimiter.as_str()).parse_next(input)?;
+    let _ = delimiter.as_str().parse_next(input)?;
+    Ok(raw.to_string())
 }
-fn unquoted_string(input: &mut &str) -> ModalResult<Literal> {
-    Ok(Literal {
-        tilde: opt(tilde).parse_next(input)?,
-        literal: repeat(0.., any.verify(|c: &char| !c.is_whitespace()))
-            .parse_next(input)?,
-    })
+fn path_string(input: &mut &str) -> ModalResult<String> {
+    let _ = 'p'.parse_next(input)?;
+    let sharp = take_while(0.., '#').parse_next(input)?;
+    let _ = '"'.parse_next(input)?;
+    let delimiter = '"'.to_string() + sharp;
+    let raw = take_until(0.., delimiter.as_str()).parse_next(input)?;
+    let _ = delimiter.as_str().parse_next(input)?;
+    Ok(raw.to_string())
 }
-fn variable(input: &mut &str) -> ModalResult<Variable> {
+fn unquoted_string(input: &mut &str) -> ModalResult<String> {
+    take_till(
+        1..,
+        (' ', '#', '$', '(', ')', '{', '}', '|', '<', '>', ';', '&'),
+    )
+    .map(str::to_string)
+    .parse_next(input)
+}
+/*fn variable(input: &mut &str) -> ModalResult<Variable> {
     // まだ
-    todo_parser.parse_next(input)
-}
+}*/
 
 #[cfg(test)]
 mod test;
