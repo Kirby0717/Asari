@@ -142,11 +142,9 @@ fn path_string(input: &mut &str) -> ModalResult<String> {
     Ok(raw.to_string())
 }
 fn unquoted_string(input: &mut &str) -> ModalResult<String> {
-    take_till(1.., |c: char| {
-        c.is_whitespace() || "#$%(){}|<>;&".contains(c)
-    })
-    .map(str::to_string)
-    .parse_next(input)
+    take_till(1.., |c: char| c.is_whitespace() || "(){}|<>;&".contains(c))
+        .map(str::to_string)
+        .parse_next(input)
 }
 fn special_var(input: &mut &str) -> ModalResult<SpecialVar> {
     dispatch!(preceded('$', any);
