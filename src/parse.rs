@@ -18,19 +18,32 @@ pub enum Word {
     Literal(String),
     // とりあえずStringで
     PathLiteral(String),
-    //Variable(Variable),
+    SpecialVar(SpecialVar),
+    EnvVar(EnvVar),
+    LocalVar(LocalVar),
 }
-/*#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Variable {
-    Named(String),     // $VAR, ${VAR}
-    ExitStatus,        // $?
-    Pid,               // $$
-    ShellName,         // $0
-    Positional(usize), // $1-$9 ${10}...
-    ArgCount,          // $#
-    AllArgs,           // $@
-    AllArgsStr,        // $*
-}*/
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct EnvVar {
+    name: String,
+    modifier: Option<VarModifier>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct LocalVar {
+    name: String,
+    modifier: Option<VarModifier>,
+    //type_annotation: Option<Type>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum VarModifier {
+    Length, // $#VAR, %#VAR
+    Exists, // $?VAR, %?VAR
+}
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SpecialVar {
+    ExitStatus, // $?
+    Pid,        // $$
+    ShellName,  // $@
+}
 
 fn space0(input: &mut &str) -> ModalResult<String> {
     take_while(0.., char::is_whitespace)
@@ -66,6 +79,18 @@ fn escape_char(input: &mut &str) -> ModalResult<char> {
     )
     .parse_next(input)
 }
+fn ident_name(input: &mut &str) -> ModalResult<String> {
+    use unicode_xid::UnicodeXID;
+    alt((
+        (
+            any.verify(|c: &char| c.is_xid_start()),
+            take_while(0.., char::is_xid_continue),
+        ),
+        ('_', take_while(1.., char::is_xid_continue)),
+    ))
+    .map(|(start, r#continue)| String::from(start) + r#continue)
+    .parse_next(input)
+}
 
 pub fn command(input: &mut &str) -> ModalResult<Command> {
     *input = input.trim();
@@ -77,7 +102,11 @@ pub fn word(input: &mut &str) -> ModalResult<Word> {
     dispatch!(peek(any);
         '\'' => quoted_string.map(Word::Literal),
         '"' => double_quoted_string.map(Word::Literal),
-        //'$' => variable.map(Word::Variable),
+        '$' => alt((
+            env_var.map(Word::EnvVar),
+            special_var.map(Word::SpecialVar),
+        )),
+        '%' => local_var.map(Word::LocalVar),
         _ => alt((
             raw_string.map(Word::Literal),
             path_string.map(Word::PathLiteral),
@@ -124,14 +153,39 @@ fn path_string(input: &mut &str) -> ModalResult<String> {
 }
 fn unquoted_string(input: &mut &str) -> ModalResult<String> {
     take_till(1.., |c: char| {
-        c.is_whitespace() || "#$(){}|<>;&".contains(c)
+        c.is_whitespace() || "#$%(){}|<>;&".contains(c)
     })
     .map(str::to_string)
     .parse_next(input)
 }
-/*fn variable(input: &mut &str) -> ModalResult<Variable> {
-    // まだ
-}*/
+fn special_var(input: &mut &str) -> ModalResult<SpecialVar> {
+    dispatch!(preceded('$', any);
+        '?' => empty.value(SpecialVar::ExitStatus),
+        '$' => empty.value(SpecialVar::Pid),
+        '@' => empty.value(SpecialVar::ShellName),
+        _ => fail,
+    )
+    .parse_next(input)
+}
+fn modifier(input: &mut &str) -> ModalResult<VarModifier> {
+    alt((
+        '#'.value(VarModifier::Length),
+        '?'.value(VarModifier::Exists),
+    ))
+    .parse_next(input)
+}
+fn env_var(input: &mut &str) -> ModalResult<EnvVar> {
+    Ok(EnvVar {
+        modifier: preceded('$', opt(modifier)).parse_next(input)?,
+        name: ident_name.parse_next(input)?,
+    })
+}
+fn local_var(input: &mut &str) -> ModalResult<LocalVar> {
+    Ok(LocalVar {
+        modifier: preceded('%', opt(modifier)).parse_next(input)?,
+        name: ident_name.parse_next(input)?,
+    })
+}
 
 #[cfg(test)]
 mod test;
