@@ -1,21 +1,17 @@
 use super::*;
 
-#[inline(always)]
-fn literal(lireral: &str) -> Word {
-    Word::Literal(lireral.to_string())
+fn literal(literal: &str) -> Word {
+    Word::Literal(literal.to_string())
 }
-#[inline(always)]
-fn path_literal(path_lireral: &str) -> Word {
-    Word::PathLiteral(path_lireral.to_string())
+fn path_literal(path_literal: &str) -> Word {
+    Word::PathLiteral(path_literal.to_string())
 }
-#[inline(always)]
 fn word_parse(
     input: &str,
 ) -> Result<Word, winnow::error::ParseError<&str, winnow::error::ContextError>>
 {
     super::word.parse(input)
 }
-#[inline(always)]
 fn word_peek(
     input: &str,
 ) -> Result<(&str, Word), winnow::error::ErrMode<winnow::error::ContextError>> {
