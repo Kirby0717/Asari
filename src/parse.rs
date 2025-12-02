@@ -19,19 +19,8 @@ pub enum Word {
     // とりあえずStringで
     PathLiteral(String),
     SpecialVar(SpecialVar),
-    EnvVar(EnvVar),
-    LocalVar(LocalVar),
-}
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct EnvVar {
-    name: String,
-    modifier: Option<VarModifier>,
-}
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct LocalVar {
-    name: String,
-    modifier: Option<VarModifier>,
-    //type_annotation: Option<Type>,
+    EnvVar(String),
+    ShellVar(String),
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum VarModifier {
@@ -40,9 +29,10 @@ pub enum VarModifier {
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SpecialVar {
-    ExitStatus, // $?
-    Pid,        // $$
-    ShellName,  // $@
+    ExitStatus,    // $?
+    Pid,           // $$
+    BackgroundPid, // $!
+    ShellName,     // $@
 }
 
 fn space0(input: &mut &str) -> ModalResult<String> {
@@ -79,7 +69,7 @@ fn escape_char(input: &mut &str) -> ModalResult<char> {
     )
     .parse_next(input)
 }
-fn ident_name(input: &mut &str) -> ModalResult<String> {
+fn ident(input: &mut &str) -> ModalResult<String> {
     use unicode_xid::UnicodeXID;
     alt((
         (
@@ -103,10 +93,10 @@ pub fn word(input: &mut &str) -> ModalResult<Word> {
         '\'' => quoted_string.map(Word::Literal),
         '"' => double_quoted_string.map(Word::Literal),
         '$' => alt((
-            env_var.map(Word::EnvVar),
+            preceded('$', ident).map(Word::EnvVar),
             special_var.map(Word::SpecialVar),
         )),
-        '%' => local_var.map(Word::LocalVar),
+        '%' => preceded('%', ident).map(Word::ShellVar),
         _ => alt((
             raw_string.map(Word::Literal),
             path_string.map(Word::PathLiteral),
@@ -162,29 +152,11 @@ fn special_var(input: &mut &str) -> ModalResult<SpecialVar> {
     dispatch!(preceded('$', any);
         '?' => empty.value(SpecialVar::ExitStatus),
         '$' => empty.value(SpecialVar::Pid),
+        '!' => empty.value(SpecialVar::BackgroundPid),
         '@' => empty.value(SpecialVar::ShellName),
         _ => fail,
     )
     .parse_next(input)
-}
-fn modifier(input: &mut &str) -> ModalResult<VarModifier> {
-    alt((
-        '#'.value(VarModifier::Length),
-        '?'.value(VarModifier::Exists),
-    ))
-    .parse_next(input)
-}
-fn env_var(input: &mut &str) -> ModalResult<EnvVar> {
-    Ok(EnvVar {
-        modifier: preceded('$', opt(modifier)).parse_next(input)?,
-        name: ident_name.parse_next(input)?,
-    })
-}
-fn local_var(input: &mut &str) -> ModalResult<LocalVar> {
-    Ok(LocalVar {
-        modifier: preceded('%', opt(modifier)).parse_next(input)?,
-        name: ident_name.parse_next(input)?,
-    })
 }
 
 #[cfg(test)]
