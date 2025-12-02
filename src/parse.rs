@@ -73,7 +73,6 @@ pub fn command(input: &mut &str) -> ModalResult<Command> {
         (word, repeat(0.., preceded(space1, word))).parse_next(input)?;
     Ok(Command { name, args })
 }
-
 pub fn word(input: &mut &str) -> ModalResult<Word> {
     dispatch!(peek(any);
         '\'' => quoted_string.map(Word::Literal),
