@@ -12,6 +12,9 @@ fn env_var(var: &str) -> Word {
 fn shell_var(var: &str) -> Word {
     Word::ShellVar(var.to_string())
 }
+fn special_var(var: SpecialVar) -> Word {
+    Word::SpecialVar(var)
+}
 fn shell(command: &str, args: &[&str], comment: Option<&str>) -> ShellCommand {
     ShellCommand {
         commands: vec![(
@@ -191,6 +194,98 @@ fn unquoted_string_test() {
     assert_eq!(word_parse("p"), Ok(literal("p")));
     assert_eq!(word_parse("rust"), Ok(literal("rust")));
     assert_eq!(word_parse("path"), Ok(literal("path")));
+}
+#[test]
+fn var_test() {
+    // 有効な変数名
+    assert_eq!(word_parse("$PATH"), Ok(env_var("PATH")));
+    assert_eq!(word_parse("$path"), Ok(env_var("path")));
+    assert_eq!(word_parse("$x"), Ok(env_var("x")));
+    assert_eq!(word_parse("$X"), Ok(env_var("X")));
+    assert_eq!(word_parse("$my_var"), Ok(env_var("my_var")));
+    assert_eq!(word_parse("$myVar"), Ok(env_var("myVar")));
+    assert_eq!(word_parse("$var123"), Ok(env_var("var123")));
+    assert_eq!(word_parse("$_private"), Ok(env_var("_private")));
+    assert_eq!(word_parse("$__double"), Ok(env_var("__double")));
+    assert_eq!(word_parse("$_123"), Ok(env_var("_123")));
+    assert_eq!(word_parse("$変数"), Ok(env_var("変数")));
+    assert_eq!(word_parse("$カウンタ"), Ok(env_var("カウンタ")));
+    assert_eq!(word_parse("$あいう"), Ok(env_var("あいう")));
+    assert_eq!(word_parse("$café"), Ok(env_var("café")));
+    assert_eq!(word_parse("%PATH"), Ok(shell_var("PATH")));
+    assert_eq!(word_parse("%path"), Ok(shell_var("path")));
+    assert_eq!(word_parse("%x"), Ok(shell_var("x")));
+    assert_eq!(word_parse("%X"), Ok(shell_var("X")));
+    assert_eq!(word_parse("%my_var"), Ok(shell_var("my_var")));
+    assert_eq!(word_parse("%myVar"), Ok(shell_var("myVar")));
+    assert_eq!(word_parse("%var123"), Ok(shell_var("var123")));
+    assert_eq!(word_parse("%_private"), Ok(shell_var("_private")));
+    assert_eq!(word_parse("%__double"), Ok(shell_var("__double")));
+    assert_eq!(word_parse("%_123"), Ok(shell_var("_123")));
+    assert_eq!(word_parse("%変数"), Ok(shell_var("変数")));
+    assert_eq!(word_parse("%カウンタ"), Ok(shell_var("カウンタ")));
+    assert_eq!(word_parse("%あいう"), Ok(shell_var("あいう")));
+    assert_eq!(word_parse("%café"), Ok(shell_var("café")));
+
+    // 無効な変数名
+    assert!(word_parse("$123").is_err());
+    assert!(word_parse("$2var").is_err());
+    assert!(word_parse("$_").is_err());
+    assert!(word_parse("$").is_err());
+    assert!(word_parse("$-var").is_err());
+    assert!(word_parse("%123").is_err());
+    assert!(word_parse("%2var").is_err());
+    assert!(word_parse("%_").is_err());
+    assert!(word_parse("%").is_err());
+    assert!(word_parse("%-var").is_err());
+
+    // 特殊変数
+    assert_eq!(word_parse("$?"), Ok(special_var(SpecialVar::ExitStatus)));
+    assert_eq!(word_parse("$$"), Ok(special_var(SpecialVar::Pid)));
+    assert_eq!(word_parse("$!"), Ok(special_var(SpecialVar::BackgroundPid)));
+    assert_eq!(word_parse("$@"), Ok(special_var(SpecialVar::ShellName)));
+    assert!(word_parse("$#").is_err());
+    assert!(word_parse("$*").is_err());
+    assert!(word_parse("$%").is_err());
+
+    // 変数の境目
+    assert_eq!(word_peek("$PATH/bin"), Ok(("/bin", env_var("PATH"))));
+    assert_eq!(word_peek("$var-suffix"), Ok(("-suffix", env_var("var"))));
+    assert_eq!(word_peek("$var.txt"), Ok((".txt", env_var("var"))));
+    assert_eq!(word_peek("$var:value"), Ok((":value", env_var("var"))));
+    assert_eq!(word_peek("$var=value"), Ok(("=value", env_var("var"))));
+    assert_eq!(word_peek("$a b"), Ok((" b", env_var("a"))));
+    assert_eq!(word_peek("$var#comment"), Ok(("#comment", env_var("var"))));
+    assert_eq!(word_peek("$var$other"), Ok(("$other", env_var("var"))));
+    assert_eq!(word_peek("$var%other"), Ok(("%other", env_var("var"))));
+    assert_eq!(word_peek("%PATH/bin"), Ok(("/bin", shell_var("PATH"))));
+    assert_eq!(word_peek("%var-suffix"), Ok(("-suffix", shell_var("var"))));
+    assert_eq!(word_peek("%var.txt"), Ok((".txt", shell_var("var"))));
+    assert_eq!(word_peek("%var:value"), Ok((":value", shell_var("var"))));
+    assert_eq!(word_peek("%var=value"), Ok(("=value", shell_var("var"))));
+    assert_eq!(word_peek("%a b"), Ok((" b", shell_var("a"))));
+    assert_eq!(
+        word_peek("%var#comment"),
+        Ok(("#comment", shell_var("var")))
+    );
+    assert_eq!(word_peek("%var$other"), Ok(("$other", shell_var("var"))));
+    assert_eq!(word_peek("%var%other"), Ok(("%other", shell_var("var"))));
+    assert_eq!(
+        word_peek("$?var"),
+        Ok(("var", special_var(SpecialVar::ExitStatus)))
+    );
+    assert_eq!(
+        word_peek("$$abc"),
+        Ok(("abc", special_var(SpecialVar::Pid)))
+    );
+    assert_eq!(
+        word_peek("$!foo"),
+        Ok(("foo", special_var(SpecialVar::BackgroundPid)))
+    );
+    assert_eq!(
+        word_peek("$@var"),
+        Ok(("var", special_var(SpecialVar::ShellName)))
+    );
 }
 
 #[test]
