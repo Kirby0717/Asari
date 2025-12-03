@@ -13,7 +13,7 @@ fn main() -> anyhow::Result<()> {
             Ok(_len) => {
                 use winnow::Parser;
                 let line = line.trim().to_string();
-                let parsed = parse::command.parse(line.as_str());
+                let parsed = parse::shell_command.parse(line.as_str());
                 println!("{parsed:?}");
             }
             Err(e) => {

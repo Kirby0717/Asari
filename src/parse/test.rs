@@ -148,11 +148,10 @@ fn unquoted_string_test() {
     assert_eq!(word_parse("file.txt"), Ok(literal("file.txt")));
     assert_eq!(word_peek("hello world"), Ok((" world", literal("hello"))));
     assert_eq!(word_peek("hello　world"), Ok(("　world", literal("hello"))));
-    assert_eq!(
-        word_peek("hello#comment"),
-        Ok(("#comment", literal("hello")))
-    );
-    assert_eq!(word_peek("hello$var"), Ok(("$var", literal("hello"))));
+    assert_eq!(word_parse("hello#comment"), Ok(literal("hello#comment")));
+    assert_eq!(word_parse("hello?world"), Ok(literal("hello?world")));
+    assert_eq!(word_parse("hello!world"), Ok(literal("hello!world")));
+    assert_eq!(word_parse("hello$world"), Ok(literal("hello$world")));
     assert_eq!(word_peek("hello|world"), Ok(("|world", literal("hello"))));
     assert_eq!(word_peek("hello>out"), Ok((">out", literal("hello"))));
     assert_eq!(word_peek("hello<in"), Ok(("<in", literal("hello"))));

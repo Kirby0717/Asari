@@ -2,12 +2,24 @@
 use winnow::{
     combinator::{
         alt, cut_err, delimited, dispatch, empty, fail, not, opt, peek,
-        preceded, repeat, terminated, todo as todo_parser,
+        preceded, repeat, separated, terminated, todo as todo_parser,
     },
     prelude::*,
-    token::{any, take_till, take_until, take_while},
+    token::{any, rest, take_till, take_until, take_while},
 };
 
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ShellCommand {
+    commands: Vec<(Command, Option<Pipe>)>,
+    comment: Option<String>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Pipe {
+    Split,
+    Pipe,
+    In,
+    Out,
+}
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Command {
     name: Word,
@@ -82,13 +94,32 @@ fn ident(input: &mut &str) -> ModalResult<String> {
     .parse_next(input)
 }
 
-pub fn command(input: &mut &str) -> ModalResult<Command> {
+pub fn shell_command(input: &mut &str) -> ModalResult<ShellCommand> {
     *input = input.trim();
-    let (name, args) =
-        (word, repeat(0.., preceded(space1, word))).parse_next(input)?;
-    Ok(Command { name, args })
+    Ok(ShellCommand {
+        commands: repeat(
+            0..=1,
+            preceded(peek(not('#')), (command, empty.value(None))),
+        )
+        .parse_next(input)?,
+        //commands: repeat(0.., preceded(peek(not('#')), (command, opt(pipe)))).parse_next(input)?,
+        comment: opt(preceded(space0, comment)).parse_next(input)?,
+    })
 }
-pub fn word(input: &mut &str) -> ModalResult<Word> {
+fn pipe(input: &mut &str) -> ModalResult<Pipe> {
+    todo!()
+}
+fn comment(input: &mut &str) -> ModalResult<String> {
+    preceded('#', rest).map(str::to_string).parse_next(input)
+}
+pub fn command(input: &mut &str) -> ModalResult<Command> {
+    Ok(Command {
+        name: word.parse_next(input)?,
+        args: repeat(0.., preceded((space1, peek(not('#'))), word))
+            .parse_next(input)?,
+    })
+}
+fn word(input: &mut &str) -> ModalResult<Word> {
     dispatch!(peek(any);
         '\'' => quoted_string.map(Word::Literal),
         '"' => double_quoted_string.map(Word::Literal),
