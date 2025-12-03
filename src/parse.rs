@@ -35,11 +35,6 @@ pub enum Word {
     ShellVar(String),
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum VarModifier {
-    Length, // $#VAR, %#VAR
-    Exists, // $?VAR, %?VAR
-}
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SpecialVar {
     ExitStatus,    // $?
     Pid,           // $$
@@ -95,7 +90,7 @@ fn ident(input: &mut &str) -> ModalResult<String> {
 }
 
 pub fn shell_command(input: &mut &str) -> ModalResult<ShellCommand> {
-    *input = input.trim();
+    *input = input.trim_start();
     Ok(ShellCommand {
         commands: repeat(
             0..=1,

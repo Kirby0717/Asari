@@ -6,6 +6,32 @@ fn literal(literal: &str) -> Word {
 fn path_literal(path_literal: &str) -> Word {
     Word::PathLiteral(path_literal.to_string())
 }
+fn env_var(var: &str) -> Word {
+    Word::EnvVar(var.to_string())
+}
+fn shell_var(var: &str) -> Word {
+    Word::ShellVar(var.to_string())
+}
+fn shell(command: &str, args: &[&str], comment: Option<&str>) -> ShellCommand {
+    ShellCommand {
+        commands: vec![(
+            Command {
+                name: literal(command),
+                args: args.iter().copied().map(literal).collect(),
+            },
+            None,
+        )],
+        comment: comment.map(str::to_string),
+    }
+}
+fn shell_parse(
+    input: &str,
+) -> Result<
+    ShellCommand,
+    winnow::error::ParseError<&str, winnow::error::ContextError>,
+> {
+    super::shell_command.parse(input)
+}
 fn word_parse(
     input: &str,
 ) -> Result<Word, winnow::error::ParseError<&str, winnow::error::ContextError>>
@@ -165,4 +191,161 @@ fn unquoted_string_test() {
     assert_eq!(word_parse("p"), Ok(literal("p")));
     assert_eq!(word_parse("rust"), Ok(literal("rust")));
     assert_eq!(word_parse("path"), Ok(literal("path")));
+}
+
+#[test]
+fn comment_test() {
+    let comment_only = |comment: &str| ShellCommand {
+        commands: vec![],
+        comment: Some(comment.to_string()),
+    };
+
+    // コメントのみ
+    assert_eq!(shell_parse("# comment"), Ok(comment_only(" comment")));
+    assert_eq!(shell_parse("#comment"), Ok(comment_only("comment")));
+    assert_eq!(shell_parse("#"), Ok(comment_only("")));
+    assert_eq!(shell_parse("# "), Ok(comment_only(" ")));
+    assert_eq!(
+        shell_parse("#  multiple  spaces"),
+        Ok(comment_only("  multiple  spaces"))
+    );
+    assert_eq!(
+        shell_parse("# 日本語コメント"),
+        Ok(comment_only(" 日本語コメント"))
+    );
+
+    // インラインコメント
+    assert_eq!(
+        shell_parse("echo hello # comment"),
+        Ok(shell("echo", &["hello"], Some(" comment")))
+    );
+    assert_eq!(
+        shell_parse("echo hello #comment"),
+        Ok(shell("echo", &["hello"], Some("comment")))
+    );
+    assert_eq!(
+        shell_parse("echo hello #"),
+        Ok(shell("echo", &["hello"], Some("")))
+    );
+    assert_eq!(
+        shell_parse("echo hello  #  spaced"),
+        Ok(shell("echo", &["hello"], Some("  spaced")))
+    );
+    assert_eq!(
+        shell_parse("echo # comment"),
+        Ok(shell("echo", &[], Some(" comment")))
+    );
+    assert_eq!(
+        shell_parse("ls -la /tmp # list files"),
+        Ok(shell("ls", &["-la", "/tmp"], Some(" list files")))
+    );
+
+    // コメントなし
+    assert_eq!(
+        shell_parse("echo hello"),
+        Ok(shell("echo", &["hello"], None))
+    );
+    assert_eq!(shell_parse("echo"), Ok(shell("echo", &[], None)));
+    assert_eq!(shell_parse("ls -la"), Ok(shell("ls", &["-la"], None)));
+
+    // 空白のみ
+    let whitespace = Ok(ShellCommand {
+        commands: vec![],
+        comment: None,
+    });
+    assert_eq!(shell_parse(""), whitespace);
+    assert_eq!(shell_parse(" "), whitespace);
+    assert_eq!(shell_parse("   "), whitespace);
+    assert_eq!(shell_parse("\t"), whitespace);
+    assert_eq!(shell_parse("　"), whitespace);
+
+    // #をコメントとして扱わないケース
+    assert_eq!(
+        shell_parse("echo hello#world"),
+        Ok(shell("echo", &["hello#world"], None))
+    );
+    assert_eq!(
+        shell_parse("echo#comment"),
+        Ok(shell("echo#comment", &[], None))
+    );
+    assert_eq!(shell_parse("file#1"), Ok(shell("file#1", &[], None)));
+    assert_eq!(
+        shell_parse("echo a#b c#d"),
+        Ok(shell("echo", &["a#b", "c#d"], None))
+    );
+    assert_eq!(
+        shell_parse("echo a#b #comment"),
+        Ok(shell("echo", &["a#b"], Some("comment")))
+    );
+
+    // クォート内の#
+    assert_eq!(
+        shell_parse("echo \"hello # world\""),
+        Ok(shell("echo", &["hello # world"], None))
+    );
+    assert_eq!(
+        shell_parse("echo \'hello # world\'"),
+        Ok(shell("echo", &["hello # world"], None))
+    );
+    assert_eq!(
+        shell_parse("echo \"a#b\" #comment"),
+        Ok(shell("echo", &["a#b"], Some("comment")))
+    );
+    assert_eq!(
+        shell_parse(r#"echo r"C:\#path""#),
+        Ok(shell("echo", &[r"C:\#path"], None))
+    );
+    assert_eq!(
+        shell_parse(r#"echo p"~/#dir""#),
+        Ok(ShellCommand {
+            commands: vec![(
+                Command {
+                    name: literal("echo"),
+                    args: vec![path_literal("~/#dir")]
+                },
+                None
+            )],
+            comment: None
+        })
+    );
+
+    // 複合ケース
+    assert_eq!(
+        shell_parse(r#"echo "hello" world # comment"#),
+        Ok(shell("echo", &["hello", "world"], Some(" comment")))
+    );
+    assert_eq!(
+        shell_parse(r#"echo "a # b" c # real comment"#),
+        Ok(shell("echo", &["a # b", "c"], Some(" real comment")))
+    );
+    assert_eq!(
+        shell_parse(r#"cmd arg1 "arg #2" arg3 # end"#),
+        Ok(shell("cmd", &["arg1", "arg #2", "arg3"], Some(" end")))
+    );
+    assert_eq!(
+        shell_parse("echo $PATH # show path"),
+        Ok(ShellCommand {
+            commands: vec![(
+                Command {
+                    name: literal("echo"),
+                    args: vec![env_var("PATH")]
+                },
+                None
+            )],
+            comment: Some(" show path".to_string())
+        })
+    );
+    assert_eq!(
+        shell_parse("echo %var # shell var"),
+        Ok(ShellCommand {
+            commands: vec![(
+                Command {
+                    name: literal("echo"),
+                    args: vec![shell_var("var")]
+                },
+                None
+            )],
+            comment: Some(" shell var".to_string())
+        })
+    );
 }
