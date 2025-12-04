@@ -28,11 +28,14 @@ fn cd(args: &[String]) -> Result<i32> {
         return Err(Error::InvalidArgs);
     }
 
-    let current_dir = std::env::current_dir().map_err(|_| {
-        Error::Runtime("現在のディレクトリが見つかりませんでした".to_string())
-    })?;
     if let Some(dir) = args.first() {
-        let next_dir = current_dir.join(dir);
+        let next_dir = std::env::current_dir()
+            .map_err(|_| {
+                Error::Runtime(
+                    "現在のディレクトリが見つかりませんでした".to_string(),
+                )
+            })?
+            .join(dir);
         if next_dir.exists() && next_dir.is_dir() {
             std::env::set_current_dir(next_dir).map_err(|_| {
                 Error::Runtime("ディレクトリの移動に失敗しました".to_string())
@@ -69,12 +72,16 @@ fn mkdir(args: &[String]) -> Result<i32> {
         return Err(Error::InvalidArgs);
     }
 
+    let mut exit_status = 0;
     for dir in args {
         use std::io::ErrorKind;
         match std::fs::create_dir_all(dir) {
             Ok(_) => {}
-            Err(e) => eprintln!("{e}"),
+            Err(e) => {
+                exit_status = 1;
+                eprintln!("{e}");
+            }
         }
     }
-    Ok(0)
+    Ok(exit_status)
 }
