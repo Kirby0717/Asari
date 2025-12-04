@@ -4,50 +4,51 @@ on:
   push:
     branches: [master]
   pull_request:
-  workflow_dispatch:  # 手動実行も可能
+  workflow_dispatch: # 手動実行も可能
 
 jobs:
   generate-licenses:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
+
       - uses: dtolnay/rust-toolchain@stable
-      
+
       - name: Install cargo-about
         run: cargo install --locked cargo-about
-      
+
       - name: Create about.hbs template
         run: |
           cat > about.hbs << 'EOF'
           # Third-Party Licenses
-          
+
           This project uses the following open source libraries:
-          
+
           {{#each crates}}
           ## {{this.name}} {{this.version}}
           - **License**: {{this.license}}
           - **Repository**: {{#if this.repository}}{{this.repository}}{{else}}N/A{{/if}}
           - **Authors**: {{#if this.authors}}{{#each this.authors}}{{this}}{{#unless @last}}, {{/unless}}{{/each}}{{else}}N/A{{/if}}
-          
+
           {{#if this.license_text}}
           <details>
           <summary>License Text</summary>
-```
+
+          \```
           {{this.license_text}}
-```
-          
+          \```
+
           </details>
           {{/if}}
-          
+
           ---
-          
+
           {{/each}}
           EOF
-      
+
       - name: Generate THIRD-PARTY-LICENSES
         run: cargo about generate about.hbs > THIRD-PARTY-LICENSES.md
-      
+
       - name: Check if licenses changed
         id: check_changes
         run: |
@@ -56,7 +57,7 @@ jobs:
           else
             echo "changed=true" >> $GITHUB_OUTPUT
           fi
-      
+
       - name: Commit and push if changed
         if: steps.check_changes.outputs.changed == 'true' && github.event_name == 'push'
         run: |
@@ -65,7 +66,7 @@ jobs:
           git add THIRD-PARTY-LICENSES.md
           git commit -m "Update THIRD-PARTY-LICENSES.md"
           git push
-      
+
       - name: Upload as artifact
         uses: actions/upload-artifact@v4
         with:
