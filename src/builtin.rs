@@ -1,9 +1,16 @@
 #![allow(unused)]
+use std::fmt::Display;
 
 #[derive(Clone, Debug)]
 pub enum Error {
     CommandNotFound,
     Exit(i32),
+    InvalidArgs,
+}
+impl Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
 }
 type Result<T> = ::std::result::Result<T, Error>;
 
@@ -19,9 +26,9 @@ fn cd(args: &[String]) -> Result<i32> {
 }
 fn exit(args: &[String]) -> Result<i32> {
     let code = args
-        .get(0)
-        .map(|code| code.parse::<i32>().ok())
-        .flatten()
+        .first()
+        .map(|code| code.parse::<i32>().map_err(|_| Error::InvalidArgs))
+        .transpose()?
         .unwrap_or(0);
     Err(Error::Exit(code))
 }
