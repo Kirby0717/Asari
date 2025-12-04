@@ -65,7 +65,7 @@ fn find_executable(name: &str) -> Option<PathBuf> {
     let extensions = name
         .extension()
         .map(|ext| vec![ext.to_os_string()])
-        .unwrap_or(get_pathext());
+        .unwrap_or_else(get_pathext);
     // 探索するパスを取得
     let search_dirs = name
         .parent()
@@ -77,11 +77,12 @@ fn find_executable(name: &str) -> Option<PathBuf> {
                 Some(vec![parent.to_owned()])
             }
         })
-        .unwrap_or(get_path());
+        .unwrap_or_else(get_path);
 
+    let file_name = name.file_stem()?;
     for dir in search_dirs {
         for ext in &extensions {
-            let candidate = dir.join(&name).with_extension(ext);
+            let candidate = dir.join(file_name).with_extension(ext);
             if candidate.exists() {
                 return Some(candidate);
             }
