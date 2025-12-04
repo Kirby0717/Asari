@@ -1,8 +1,10 @@
 #![allow(unused)]
+use std::fmt::Display;
+
 use winnow::{
     combinator::{
-        alt, cut_err, delimited, dispatch, empty, fail, not, opt, peek,
-        preceded, repeat, separated, terminated, todo as todo_parser,
+        alt, cut_err, delimited, dispatch, empty, fail, not, opt, peek, preceded, repeat,
+        separated, terminated, todo as todo_parser,
     },
     prelude::*,
     token::{any, rest, take_till, take_until, take_while},
@@ -10,8 +12,8 @@ use winnow::{
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ShellCommand {
-    commands: Vec<(Command, Option<Pipe>)>,
-    comment: Option<String>,
+    pub commands: Vec<(Command, Option<Pipe>)>,
+    pub comment: Option<String>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Pipe {
@@ -22,8 +24,8 @@ pub enum Pipe {
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Command {
-    name: Word,
-    args: Vec<Word>,
+    pub name: Word,
+    pub args: Vec<Word>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Word {
@@ -33,6 +35,15 @@ pub enum Word {
     SpecialVar(SpecialVar),
     EnvVar(String),
     ShellVar(String),
+}
+impl Display for Word {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use Word::*;
+        match self {
+            Literal(literal) => write!(f, "{literal}"),
+            _ => todo!(),
+        }
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SpecialVar {
@@ -54,9 +65,7 @@ fn space1(input: &mut &str) -> ModalResult<String> {
 }
 fn unicode_number(input: &mut &str) -> ModalResult<char> {
     take_while(1..=6, (('0'..='9'), ('A'..='F'), ('a'..='f')))
-        .verify_map(|num: &str| {
-            u32::from_str_radix(num, 16).ok().and_then(char::from_u32)
-        })
+        .verify_map(|num: &str| u32::from_str_radix(num, 16).ok().and_then(char::from_u32))
         .parse_next(input)
 }
 fn escape_char(input: &mut &str) -> ModalResult<char> {
@@ -110,8 +119,7 @@ fn comment(input: &mut &str) -> ModalResult<String> {
 pub fn command(input: &mut &str) -> ModalResult<Command> {
     Ok(Command {
         name: word.parse_next(input)?,
-        args: repeat(0.., preceded((space1, peek(not('#'))), word))
-            .parse_next(input)?,
+        args: repeat(0.., preceded((space1, peek(not('#'))), word)).parse_next(input)?,
     })
 }
 fn word(input: &mut &str) -> ModalResult<Word> {

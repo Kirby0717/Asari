@@ -1,20 +1,33 @@
+mod builtin;
+mod exec;
 mod parse;
 
 fn main() -> anyhow::Result<()> {
     welcome();
 
-    let current_dir = std::env::current_dir()?;
+    let mut shell = exec::Shell::new();
+
     loop {
-        continuation(&current_dir);
+        continuation(&std::env::current_dir()?);
 
         let stdin = std::io::stdin();
         let mut line = String::new();
         match stdin.read_line(&mut line) {
             Ok(_len) => {
                 use winnow::Parser;
-                let line = line.trim().to_string();
-                let parsed = parse::shell_command.parse_peek(line.as_str());
+                let line = line.trim_end_matches(['\n', '\r']).to_string();
+                let parsed = parse::shell_command.parse(line.as_str());
                 println!("{parsed:?}");
+                let Ok(command) = parsed else {
+                    eprintln!("{}", parsed.unwrap_err());
+                    continue;
+                };
+
+                use exec::Error;
+                match shell.execute(&command) {
+                    Err(Error::Exit(code)) => std::process::exit(code),
+                    _ => {},
+                }
             }
             Err(e) => {
                 eprintln!("err: {e}");
@@ -39,12 +52,10 @@ fn format_path(path: &std::path::Path) -> String {
     {
         if path == home {
             "~".to_string()
-        }
-        else {
+        } else {
             format!("~/{}", relative.display())
         }
-    }
-    else {
+    } else {
         path.display().to_string()
     }
 }
