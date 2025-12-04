@@ -1,6 +1,6 @@
 #![allow(unused)]
 use crate::parse::ShellCommand;
-use std::fmt::Display;
+use std::{fmt::Display, path::PathBuf};
 
 #[derive(Clone, Debug)]
 pub enum Error {
@@ -41,6 +41,12 @@ impl Shell {
             }
 
             // 外部コマンドの実行を試す
+            let Some(name) = find_executable(&name)
+            else {
+                return Err(Error::CommandError(
+                    "fail to find command".to_string(),
+                ));
+            };
             let status =
                 match std::process::Command::new(name).args(args).status() {
                     Ok(status) => status,
@@ -49,4 +55,42 @@ impl Shell {
         }
         Ok(())
     }
+}
+
+/// 実行可能ファイルのフルパスを探索
+fn find_executable(name: &str) -> Option<PathBuf> {
+    let name = PathBuf::from(name);
+    // 既に拡張子があるか、パス区切りを含む場合はそのまま
+    if name.extension().is_some() || name.ancestors().count() > 2 {
+        return if name.exists() { Some(name) } else { None };
+    }
+
+    let pathext = get_pathext();
+    let path_dirs = get_path();
+
+    for dir in path_dirs {
+        for ext in &pathext {
+            let candidate =
+                dir.join(&name).with_extension(ext.trim_start_matches('.'));
+            println!("{candidate:?}");
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+fn get_pathext() -> Vec<String> {
+    std::env::var("PATHEXT")
+        .unwrap_or(".COM;.EXE;.BAT;.CMD".to_string())
+        .split(';')
+        .map(|s| s.to_string())
+        .collect()
+}
+fn get_path() -> Vec<PathBuf> {
+    std::env::var("PATH")
+        .unwrap_or_default()
+        .split(';')
+        .map(PathBuf::from)
+        .collect()
 }
