@@ -6,6 +6,7 @@ pub enum Error {
     CommandNotFound,
     Exit(i32),
     InvalidArgs,
+    Runtime(String),
 }
 impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -27,15 +28,27 @@ fn cd(args: &[String]) -> Result<i32> {
         return Err(Error::InvalidArgs);
     }
 
-    let current_dir = std::env::current_dir().unwrap();
+    let current_dir = std::env::current_dir().map_err(|_| {
+        Error::Runtime("現在のディレクトリが見つかりませんでした".to_string())
+    })?;
     if let Some(dir) = args.first() {
         let next_dir = current_dir.join(dir);
-        if next_dir.exists() {
-            std::env::set_current_dir(next_dir);
+        if next_dir.exists() && next_dir.is_dir() {
+            std::env::set_current_dir(next_dir).map_err(|_| {
+                Error::Runtime("ディレクトリの移動に失敗しました".to_string())
+            })?;
         }
         else {
             return Err(Error::InvalidArgs);
         }
+    }
+    else {
+        let home_dir = dirs::home_dir().ok_or(Error::Runtime(
+            "ホームディレクトリの取得に失敗しました".to_string(),
+        ))?;
+        std::env::set_current_dir(home_dir).map_err(|_| {
+            Error::Runtime("ディレクトリの移動に失敗しました".to_string())
+        })?;
     }
     Ok(0)
 }
@@ -57,7 +70,11 @@ fn mkdir(args: &[String]) -> Result<i32> {
     }
 
     for dir in args {
-        std::fs::create_dir_all(dir);
+        use std::io::ErrorKind;
+        match std::fs::create_dir_all(dir) {
+            Ok(_) => {}
+            Err(e) => eprintln!("{e}"),
+        }
     }
     Ok(0)
 }

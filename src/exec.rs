@@ -44,7 +44,7 @@ impl Shell {
             let Some(name) = find_executable(&name)
             else {
                 return Err(Error::CommandError(
-                    "fail to find command".to_string(),
+                    "コマンドが見つかりませんでした".to_string(),
                 ));
             };
             let status =

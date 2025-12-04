@@ -27,12 +27,12 @@ fn main() -> anyhow::Result<()> {
                 use exec::Error;
                 match shell.execute(&command) {
                     Err(Error::Exit(code)) => std::process::exit(code),
-                    Err(e) => eprintln!("fail to run command: {e}"),
+                    Err(e) => eprintln!("コマンドの実行に失敗しました : {e}"),
                     _ => {}
                 }
             }
             Err(e) => {
-                eprintln!("fail to get line: {e}");
+                eprintln!("入力の取得に失敗しました : {e}");
             }
         }
     }
@@ -45,7 +45,9 @@ fn welcome() {
 fn continuation(current_dir: &std::path::Path) {
     use std::io::Write;
     print!("{}>", format_path(current_dir));
-    std::io::stdout().flush().expect("stdoutのフラッシュに失敗");
+    std::io::stdout()
+        .flush()
+        .expect("stdoutのフラッシュに失敗しました");
 }
 
 fn format_path(path: &std::path::Path) -> String {
