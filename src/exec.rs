@@ -1,6 +1,6 @@
 #![allow(unused)]
 use crate::parse::ShellCommand;
-use std::{fmt::Display, path::PathBuf};
+use std::{ffi::OsString, fmt::Display, path::PathBuf};
 
 #[derive(Clone, Debug)]
 pub enum Error {
@@ -60,19 +60,28 @@ impl Shell {
 /// 実行可能ファイルのフルパスを探索
 fn find_executable(name: &str) -> Option<PathBuf> {
     let name = PathBuf::from(name);
-    // 既に拡張子があるか、パス区切りを含む場合はそのまま
-    if name.extension().is_some() || name.ancestors().count() > 2 {
-        return if name.exists() { Some(name) } else { None };
-    }
 
-    let pathext = get_pathext();
-    let path_dirs = get_path();
+    // 探索する拡張子を取得
+    let extensions = name
+        .extension()
+        .map(|ext| vec![ext.to_os_string()])
+        .unwrap_or(get_pathext());
+    // 探索するパスを取得
+    let search_dirs = name
+        .parent()
+        .and_then(|parent| {
+            if parent.as_os_str().is_empty() {
+                None
+            }
+            else {
+                Some(vec![parent.to_owned()])
+            }
+        })
+        .unwrap_or(get_path());
 
-    for dir in path_dirs {
-        for ext in &pathext {
-            let candidate =
-                dir.join(&name).with_extension(ext.trim_start_matches('.'));
-            println!("{candidate:?}");
+    for dir in search_dirs {
+        for ext in &extensions {
+            let candidate = dir.join(&name).with_extension(ext);
             if candidate.exists() {
                 return Some(candidate);
             }
@@ -80,14 +89,16 @@ fn find_executable(name: &str) -> Option<PathBuf> {
     }
     None
 }
-fn get_pathext() -> Vec<String> {
+fn get_pathext() -> Vec<OsString> {
+    // var_osを使用するとより正確
     std::env::var("PATHEXT")
         .unwrap_or(".COM;.EXE;.BAT;.CMD".to_string())
         .split(';')
-        .map(|s| s.to_string())
+        .map(|s| OsString::from(s.trim_start_matches('.')))
         .collect()
 }
 fn get_path() -> Vec<PathBuf> {
+    // var_osを使用するとより正確
     std::env::var("PATH")
         .unwrap_or_default()
         .split(';')
