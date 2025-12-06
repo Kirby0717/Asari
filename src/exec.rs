@@ -28,7 +28,7 @@ impl Shell {
         for (command, _pipe) in &cmd.commands {
             let name = command.name.to_string();
             let args: Vec<_> =
-                command.args.iter().map(Word::to_string).collect();
+                command.args.iter().map(ToString::to_string).collect();
 
             // ビルトインの実行を試す
             match crate::builtin::run(&name, &args) {
