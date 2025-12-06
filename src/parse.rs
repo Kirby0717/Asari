@@ -3,8 +3,8 @@ use std::fmt::Display;
 
 use winnow::{
     combinator::{
-        alt, cut_err, delimited, dispatch, empty, fail, not, opt, peek, preceded, repeat,
-        separated, terminated, todo as todo_parser,
+        alt, cut_err, delimited, dispatch, empty, fail, not, opt, peek,
+        preceded, repeat, separated, terminated, todo as todo_parser,
     },
     prelude::*,
     token::{any, rest, take_till, take_until, take_while},
@@ -65,7 +65,9 @@ fn space1(input: &mut &str) -> ModalResult<String> {
 }
 fn unicode_number(input: &mut &str) -> ModalResult<char> {
     take_while(1..=6, (('0'..='9'), ('A'..='F'), ('a'..='f')))
-        .verify_map(|num: &str| u32::from_str_radix(num, 16).ok().and_then(char::from_u32))
+        .verify_map(|num: &str| {
+            u32::from_str_radix(num, 16).ok().and_then(char::from_u32)
+        })
         .parse_next(input)
 }
 fn escape_char(input: &mut &str) -> ModalResult<char> {
@@ -86,13 +88,13 @@ fn escape_char(input: &mut &str) -> ModalResult<char> {
     .parse_next(input)
 }
 fn ident(input: &mut &str) -> ModalResult<String> {
-    use unicode_xid::UnicodeXID;
+    use unicode_ident::*;
     alt((
         (
-            any.verify(|c: &char| c.is_xid_start()),
-            take_while(0.., char::is_xid_continue),
+            any.verify(|c: &char| is_xid_start(*c)),
+            take_while(0.., is_xid_continue),
         ),
-        ('_', take_while(1.., char::is_xid_continue)),
+        ('_', take_while(1.., is_xid_continue)),
     ))
     .map(|(start, r#continue)| String::from(start) + r#continue)
     .parse_next(input)
@@ -119,7 +121,8 @@ fn comment(input: &mut &str) -> ModalResult<String> {
 pub fn command(input: &mut &str) -> ModalResult<Command> {
     Ok(Command {
         name: word.parse_next(input)?,
-        args: repeat(0.., preceded((space1, peek(not('#'))), word)).parse_next(input)?,
+        args: repeat(0.., preceded((space1, peek(not('#'))), word))
+            .parse_next(input)?,
     })
 }
 fn word(input: &mut &str) -> ModalResult<Word> {
