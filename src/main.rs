@@ -14,13 +14,16 @@ fn main() -> anyhow::Result<()> {
         let mut line = String::new();
         match stdin.read_line(&mut line) {
             Ok(_len) => {
-                line = r#""\u{}""#.to_string();
+                line = r#""\u{1110000}""#.to_string();
                 let parsed = parse::parse_shell_command(&line);
                 //println!("{parsed:?}");
-                let Ok(command) = parsed
-                else {
-                    eprintln!("{}", parsed.unwrap_err());
-                    continue;
+                let command = match parsed {
+                    Ok(command) => command,
+                    Err(e) => {
+                        let display = e.inner().display(e.input());
+                        eprintln!("{display}");
+                        continue;
+                    }
                 };
 
                 use exec::Error;

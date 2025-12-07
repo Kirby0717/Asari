@@ -1,22 +1,24 @@
 #![allow(unused)]
+pub mod error;
+pub mod tools;
+
+use error::*;
 use std::fmt::{Display, write};
+use tools::ParserExt;
 use winnow::{
     LocatingSlice,
     combinator::{
         alt, cut_err, delimited, dispatch, empty, fail, not, opt, peek,
         preceded, repeat, separated, terminated, todo as todo_parser,
     },
-    error::{
-        AddContext, ContextError, ErrMode, ParserError, StrContext,
-        StrContextValue,
-    },
     prelude::*,
-    stream::Offset,
+    stream::{Location, Offset},
     token::{any, rest, take_till, take_until, take_while},
 };
 
 type Input<'i> = LocatingSlice<&'i str>;
 type Span = std::ops::Range<usize>;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Spanned<T> {
     inner: T,
@@ -87,20 +89,8 @@ pub enum SpecialVar {
     BackgroundPid, // $!
     ShellName,     // $@
 }
-#[derive(Clone, Debug)]
-pub enum ParseErrorKind {}
-#[derive(Clone, Debug)]
-pub struct ParseError {
-    //kind: ParseErrorKind,
-    span: Span,
-    context: Option<String>,
-}
-impl winnow::error::ParserError<Input<'_>> for ParserError {
-    fn or(self, other: Self) -> Self {
-        
-    }
-    fn from_input(input: &Input<'_>) -> Self {}
-}
+
+type ModalResult<O> = winnow::ModalResult<O, ParseError>;
 
 fn space0<'a>(input: &mut Input<'a>) -> ModalResult<&'a str> {
     take_while(0.., char::is_whitespace).parse_next(input)
@@ -109,17 +99,13 @@ fn space1<'a>(input: &mut Input<'a>) -> ModalResult<&'a str> {
     take_while(1.., char::is_whitespace).parse_next(input)
 }
 fn unicode_number(input: &mut Input) -> ModalResult<char> {
-    let hex = take_while(1.., char::is_hex_digit)
-        .context(StrContext::Label("Unicode エスケープ"))
-        .context(StrContext::Expected(StrContextValue::Description("16進数")))
-        .parse_next(input)?;
-
-    /*take_while(1..=6, (('0'..='9'), ('A'..='F'), ('a'..='f')))
-    .verify_map(|num: &str| {
-        u32::from_str_radix(num, 16).ok().and_then(char::from_u32)
-    })
-    .parse_next(input)*/
-    todo!()
+    take_until(0.., '}')
+        .try_map_with_span(|input| {
+            let code = u32::from_str_radix(input, 16)
+                .map_err(|_| ParseErrorKind::NotHex)?;
+            char::from_u32(code).ok_or(ParseErrorKind::InvalidUnicode)
+        })
+        .parse_next(input)
 }
 fn escape_char(input: &mut Input) -> ModalResult<char> {
     preceded(
@@ -155,7 +141,7 @@ pub fn parse_shell_command(
     input: &str,
 ) -> Result<
     ShellCommand,
-    winnow::error::ParseError<LocatingSlice<&str>, ContextError>,
+    winnow::error::ParseError<LocatingSlice<&str>, ParseError>,
 > {
     shell_command.parse(Input::new(input))
 }
