@@ -4,7 +4,7 @@ pub mod tools;
 
 use error::*;
 use std::fmt::{Display, write};
-use tools::ParserExt;
+use tools::ParserSpanExt;
 use winnow::{
     LocatingSlice,
     combinator::{
@@ -15,6 +15,8 @@ use winnow::{
     stream::{Location, Offset},
     token::{any, rest, take_till, take_until, take_while},
 };
+
+use crate::parse::tools::ParserExt;
 
 type Input<'i> = LocatingSlice<&'i str>;
 type Span = std::ops::Range<usize>;
@@ -102,7 +104,7 @@ fn unicode_number(input: &mut Input) -> ModalResult<char> {
     take_until(0.., '}')
         .try_map_with_span(|input| {
             let code = u32::from_str_radix(input, 16)
-                .map_err(|_| ParseErrorKind::NotHex)?;
+                .map_err(ParseErrorKind::ParseHexError)?;
             char::from_u32(code).ok_or(ParseErrorKind::InvalidUnicode)
         })
         .parse_next(input)
@@ -114,12 +116,12 @@ fn escape_char(input: &mut Input) -> ModalResult<char> {
             'n' => empty.value('\n'),
             'r' => empty.value('\r'),
             't' => empty.value('\t'),
-            'u' => cut_err(delimited('{', unicode_number, '}')),
+            'u' => delimited('{', unicode_number, '}').cut(),
             '\\' => empty.value('\\'),
             '\"' => empty.value('\"'),
             '\'' => empty.value('\''),
             '0' => empty.value('\0'),
-            _ => cut_err(fail)
+            c => fail.try_map_with_span(|_: char| Err(ParseErrorKind::UnrecognizedEscape(c))).cut()
         ),
     )
     .parse_next(input)

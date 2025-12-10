@@ -1,48 +1,52 @@
-use std::marker::PhantomData;
+mod impls;
 
-use super::error::*;
+use crate::parse::error::*;
+use std::marker::PhantomData;
 use winnow::{
     ModalResult, Parser,
     combinator::impls::TryMap,
-    error::{ErrMode, FromExternalError},
+    error::{ErrMode, FromExternalError, ModalError, ParserError},
     stream::{Location, Stream},
 };
 
 impl<I, O, E, P: Parser<I, O, E>> ParserExt<I, O, E> for P {}
-pub trait ParserExt<I, O, E>: Parser<I, O, E> + Sized {
-    fn try_map_with_span<O2, F>(self, map: F) -> TryMapWithSpan<Self, F, O>
+pub trait ParserExt<I, O, E>: Parser<I, O, E> {
+    #[inline(always)]
+    fn cut(self) -> impls::Cut<Self, I, O, E>
     where
-        F: FnMut(O) -> Result<O2, ParseErrorKind>,
+        Self: Sized,
+        I: Stream,
+        E: ParserError<I> + ModalError,
     {
-        TryMapWithSpan {
+        impls::Cut {
             parser: self,
-            map,
+            i: PhantomData,
             o: PhantomData,
+            e: PhantomData,
         }
     }
 }
 
-pub struct TryMapWithSpan<P, F, O> {
-    parser: P,
-    map: F,
-    o: PhantomData<O>,
-}
-
-impl<I, O, O2, E, P, F> Parser<I, O2, E> for TryMapWithSpan<P, F, O>
-where
-    I: Stream + Location,
-    P: Parser<I, O, E>,
-    F: FnMut(O) -> Result<O2, ParseErrorKind>,
-    E: FromExternalError<I, ParseError>,
-{
-    fn parse_next(&mut self, input: &mut I) -> winnow::Result<O2, E> {
-        let start = input.checkpoint();
-        let begin = input.current_token_start();
-        let output = self.parser.parse_next(input)?;
-        let span = begin..input.previous_token_end();
-        (self.map)(output).map_err(|kind| {
-            input.reset(&start);
-            E::from_external_error(input, ParseError { kind, span })
-        })
+impl<I, O, P: Parser<I, O, ErrMode<ParseError>>> ParserSpanExt<I, O> for P {}
+pub trait ParserSpanExt<I, O>: Parser<I, O, ErrMode<ParseError>> {
+    #[inline(always)]
+    fn try_map_with_span<G, O2, E2>(
+        self,
+        map: G,
+    ) -> impls::TryMapWithSpan<Self, G, I, O, O2, E2>
+    where
+        Self: Sized,
+        G: FnMut(O) -> Result<O2, E2>,
+        I: Stream + Location,
+        ParseErrorKind: FromExternalError<I, E2>,
+    {
+        impls::TryMapWithSpan {
+            parser: self,
+            map,
+            i: PhantomData,
+            o: PhantomData,
+            o2: PhantomData,
+            e2: PhantomData,
+        }
     }
 }
