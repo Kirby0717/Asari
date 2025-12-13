@@ -8,8 +8,8 @@ use tools::ParserSpanExt;
 use winnow::{
     LocatingSlice,
     combinator::{
-        alt, cut_err, delimited, dispatch, empty, fail, not, opt, peek,
-        preceded, repeat, separated, terminated, todo as todo_parser,
+        alt, delimited, dispatch, empty, fail, not, opt, peek, preceded,
+        repeat, separated, terminated, todo as todo_parser,
     },
     prelude::*,
     stream::{Location, Offset},
@@ -112,31 +112,45 @@ fn unicode_number(input: &mut Input) -> ModalResult<char> {
 fn escape_char(input: &mut Input) -> ModalResult<char> {
     preceded(
         '\\',
-        dispatch!(any;
-            'n' => empty.value('\n'),
-            'r' => empty.value('\r'),
-            't' => empty.value('\t'),
-            'u' => delimited('{', unicode_number, '}').cut(),
-            '\\' => empty.value('\\'),
-            '\"' => empty.value('\"'),
-            '\'' => empty.value('\''),
-            '0' => empty.value('\0'),
-            c => fail.try_map_with_span(|_: char| Err(ParseErrorKind::UnrecognizedEscape(c))).cut()
+        dispatch!(peek(any);
+            'n' => any.value('\n'),
+            'r' => any.value('\r'),
+            't' => any.value('\t'),
+            'u' => delimited("u{", unicode_number, '}').cut(),
+            '\\' => any.value('\\'),
+            '\"' => any.value('\"'),
+            '\'' => any.value('\''),
+            '0' => any.value('\0'),
+            c => any.try_map_with_span(|_| Err(ParseErrorKind::UnrecognizedEscape(c))).cut()
         ),
     )
     .parse_next(input)
 }
 fn ident(input: &mut Input) -> ModalResult<String> {
     use unicode_ident::*;
-    alt((
-        (
-            any.verify(|c: &char| is_xid_start(*c)),
-            take_while(0.., is_xid_continue),
-        ),
-        ('_', take_while(1.., is_xid_continue)),
-    ))
-    .map(|(start, r#continue)| String::from(start) + r#continue)
-    .parse_next(input)
+    take_till(0.., char::is_whitespace)
+        .try_map_with_span(|ident| {
+            // _ 単体や空はエラー
+            if ident == "_" || ident.is_empty() {
+                return Err(ParseErrorKind::InvalidIdent);
+            }
+            for c in ident.chars().enumerate() {
+                match c {
+                    // 1文字目
+                    (1, '_') => {}
+                    (1, c) if is_xid_start(c) => {}
+                    // 2文字目以降
+                    (_, c) if is_xid_continue(c) => {}
+                    // エラー
+                    (_, _) => {
+                        return Err(ParseErrorKind::InvalidIdent);
+                    }
+                }
+            }
+            Ok(ident.to_string())
+        })
+        .cut()
+        .parse_next(input)
 }
 
 pub fn parse_shell_command(
@@ -176,10 +190,10 @@ fn word(input: &mut Input) -> ModalResult<Spanned<Word>> {
     dispatch!(peek(any);
         '\'' => quoted_string.map(Word::Literal),
         '"' => double_quoted_string.map(Word::Literal),
-        '$' => alt((
-            preceded('$', ident).map(Word::EnvVar),
+        '$' => preceded('$', alt((
             special_var.map(Word::SpecialVar),
-        )),
+            ident.map(Word::EnvVar),
+        ))),
         '%' => preceded('%', ident).map(Word::ShellVar),
         _ => alt((
             raw_string.map(Word::Literal),
@@ -198,6 +212,8 @@ fn quoted_string(input: &mut Input) -> ModalResult<String> {
         repeat(0.., alt((escape_char, any.verify(|c| *c != DELIMITER)))),
         DELIMITER,
     )
+    .map_err_with_span(|_| ParseErrorKind::NoEndQuotation)
+    .cut()
     .parse_next(input)
 }
 fn double_quoted_string(input: &mut Input) -> ModalResult<String> {
@@ -207,6 +223,8 @@ fn double_quoted_string(input: &mut Input) -> ModalResult<String> {
         repeat(0.., alt((escape_char, any.verify(|c| *c != DELIMITER)))),
         DELIMITER,
     )
+    .map_err_with_span(|_| ParseErrorKind::NoEndDoubleQuotation)
+    .cut()
     .parse_next(input)
 }
 fn raw_string(input: &mut Input) -> ModalResult<String> {
@@ -233,7 +251,7 @@ fn unquoted_string(input: &mut Input) -> ModalResult<String> {
         .parse_next(input)
 }
 fn special_var(input: &mut Input) -> ModalResult<SpecialVar> {
-    dispatch!(preceded('$', any);
+    dispatch!(any;
         '?' => empty.value(SpecialVar::ExitStatus),
         '$' => empty.value(SpecialVar::Pid),
         '!' => empty.value(SpecialVar::BackgroundPid),

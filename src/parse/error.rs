@@ -11,7 +11,10 @@ use super::{Input, Span};
 pub enum ParseErrorKind {
     ParseHexError(std::num::ParseIntError),
     InvalidUnicode,
+    InvalidIdent,
     UnrecognizedEscape(char),
+    NoEndQuotation,
+    NoEndDoubleQuotation,
     #[default]
     Other,
 }
@@ -30,7 +33,10 @@ impl Display for ParseErrorKind {
                 }
             }
             InvalidUnicode => write!(f, "不正なUnicodeです"),
+            InvalidIdent => write!(f, "不正な名前です"),
             UnrecognizedEscape(c) => write!(f, "不明なエスケープ \\{c} です"),
+            NoEndQuotation => write!(f, "クォーテーションを閉じてください"),
+            NoEndDoubleQuotation => write!(f, "ダブルクォーテーションを閉じてください"),
             e => write!(f, "不明なエラーです"),
         }
     }
@@ -67,7 +73,7 @@ impl ParseError {
 impl ParserError<Input<'_>> for ParseError {
     type Inner = Self;
     fn from_input(input: &Input) -> Self {
-        let pos = input.previous_token_end();
+        let pos = input.current_token_start();
         ParseError {
             span: pos,
             //span: pos..pos,

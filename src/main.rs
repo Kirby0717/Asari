@@ -14,9 +14,8 @@ fn main() -> anyhow::Result<()> {
         let mut line = String::new();
         match stdin.read_line(&mut line) {
             Ok(_len) => {
-                line = r#""\au{110000}""#.to_string();
                 let parsed = parse::parse_shell_command(&line);
-                //println!("{parsed:?}");
+                println!("{parsed:?}");
                 let command = match parsed {
                     Ok(command) => command,
                     Err(e) => {
@@ -25,6 +24,7 @@ fn main() -> anyhow::Result<()> {
                         continue;
                     }
                 };
+                continue;
 
                 use exec::Error;
                 match shell.execute(&command) {

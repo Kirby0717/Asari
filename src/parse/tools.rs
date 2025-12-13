@@ -25,6 +25,24 @@ pub trait ParserExt<I, O, E>: Parser<I, O, E> {
             e: PhantomData,
         }
     }
+    #[inline(always)]
+    fn map_err_with_span<G>(
+        self,
+        map: G,
+    ) -> impls::MapErrWithSpan<Self, G, I, O, E>
+    where
+        G: FnMut(E) -> ParseErrorKind,
+        Self: core::marker::Sized,
+        I: Location,
+    {
+        impls::MapErrWithSpan {
+            parser: self,
+            map,
+            i: Default::default(),
+            o: Default::default(),
+            e: Default::default(),
+        }
+    }
 }
 
 impl<I, O, P: Parser<I, O, ErrMode<ParseError>>> ParserSpanExt<I, O> for P {}

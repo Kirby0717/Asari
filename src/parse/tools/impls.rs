@@ -29,6 +29,40 @@ where
     }
 }
 
+pub struct MapErrWithSpan<F, G, I, O, E>
+where
+    F: Parser<I, O, E>,
+    G: FnMut(E) -> ParseErrorKind,
+    I: Location,
+{
+    pub(crate) parser: F,
+    pub(crate) map: G,
+    pub(crate) i: core::marker::PhantomData<I>,
+    pub(crate) o: core::marker::PhantomData<O>,
+    pub(crate) e: core::marker::PhantomData<E>,
+}
+impl<F, G, I, O, E> Parser<I, O, ErrMode<ParseError>>
+    for MapErrWithSpan<F, G, I, O, E>
+where
+    F: Parser<I, O, E>,
+    G: FnMut(E) -> ParseErrorKind,
+    I: Location,
+{
+    #[inline]
+    fn parse_next(&mut self, input: &mut I) -> ModalResult<O, ParseError> {
+        let begin = input.current_token_start();
+        let result = self.parser.parse_next(input);
+        let span = begin..input.previous_token_end();
+        match result {
+            Err(e) => Err(ErrMode::Backtrack(ParseError {
+                kind: (self.map)(e),
+                span: begin,
+            })),
+            Ok(o) => Ok(o),
+        }
+    }
+}
+
 pub struct TryMapWithSpan<F, G, I, O, O2, E2>
 where
     F: Parser<I, O, ErrMode<ParseError>>,
@@ -52,7 +86,7 @@ where
     ParseErrorKind: FromExternalError<I, E2>,
 {
     fn parse_next(&mut self, input: &mut I) -> ModalResult<O2, ParseError> {
-        let start = input.checkpoint();
+        //let start = input.checkpoint();
         let begin = input.current_token_start();
         let output = self.parser.parse_next(input)?;
         let span = begin..input.previous_token_end();
@@ -60,7 +94,6 @@ where
             //input.reset(&start);
             ErrMode::Backtrack(ParseError {
                 span: begin,
-                //span,
                 kind: ParseErrorKind::from_external_error(input, err),
             })
         })
