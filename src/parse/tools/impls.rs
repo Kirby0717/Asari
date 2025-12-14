@@ -52,7 +52,7 @@ where
     fn parse_next(&mut self, input: &mut I) -> ModalResult<O, ParseError> {
         let begin = input.current_token_start();
         let result = self.parser.parse_next(input);
-        let span = begin..input.previous_token_end();
+        //let span = begin..input.previous_token_end();
         match result {
             Err(e) => Err(ErrMode::Backtrack(ParseError {
                 kind: (self.map)(e),
@@ -89,7 +89,7 @@ where
         //let start = input.checkpoint();
         let begin = input.current_token_start();
         let output = self.parser.parse_next(input)?;
-        let span = begin..input.previous_token_end();
+        //let span = begin..input.previous_token_end();
         (self.map)(output).map_err(|err| {
             //input.reset(&start);
             ErrMode::Backtrack(ParseError {

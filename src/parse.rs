@@ -137,8 +137,8 @@ fn ident(input: &mut Input) -> ModalResult<String> {
             for c in ident.chars().enumerate() {
                 match c {
                     // 1文字目
-                    (1, '_') => {}
-                    (1, c) if is_xid_start(c) => {}
+                    (0, '_') => {}
+                    (0, c) if is_xid_start(c) => {}
                     // 2文字目以降
                     (_, c) if is_xid_continue(c) => {}
                     // エラー

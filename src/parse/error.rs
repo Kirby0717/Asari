@@ -85,7 +85,7 @@ impl ParserError<Input<'_>> for ParseError {
     }
 }
 impl FromExternalError<Input<'_>, ParseError> for ParseError {
-    fn from_external_error(input: &Input<'_>, e: ParseError) -> Self {
+    fn from_external_error(_input: &Input<'_>, e: ParseError) -> Self {
         e
     }
 }
