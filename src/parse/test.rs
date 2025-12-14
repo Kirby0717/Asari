@@ -1,26 +1,44 @@
 use super::*;
+use winnow::LocatingSlice;
 
-fn literal(literal: &str) -> Word {
-    Word::Literal(literal.to_string())
+type SpannedInput<'a> = (&'a str, Span);
+
+fn literal(literal: SpannedInput) -> Spanned<Word> {
+    Spanned {
+        inner: Word::Literal(literal.0.to_string()),
+        span: literal.1,
+    }
 }
-fn path_literal(path_literal: &str) -> Word {
-    Word::PathLiteral(path_literal.to_string())
+fn path_literal(path_literal: SpannedInput) -> Spanned<Word> {
+    Spanned {
+        inner: Word::PathLiteral(path_literal.0.to_string()),
+        span: path_literal.1,
+    }
 }
-fn env_var(var: &str) -> Word {
-    Word::EnvVar(var.to_string())
+fn env_var(var: SpannedInput) -> Spanned<Word> {
+    Spanned {
+        inner: Word::EnvVar(var.0.to_string()),
+        span: var.1,
+    }
 }
-fn shell_var(var: &str) -> Word {
-    Word::ShellVar(var.to_string())
+fn shell_var(var: SpannedInput) -> Spanned<Word> {
+    Spanned {
+        inner: Word::ShellVar(var.0.to_string()),
+        span: var.1,
+    }
 }
-fn special_var(var: SpecialVar) -> Word {
-    Word::SpecialVar(var)
+fn special_var(var: SpecialVar, span: Span) -> Spanned<Word> {
+    Spanned {
+        inner: Word::SpecialVar(var),
+        span,
+    }
 }
-fn shell(command: &str, args: &[&str], comment: Option<&str>) -> ShellCommand {
+fn shell(command: SpannedInput, args: &[SpannedInput], comment: Option<&str>) -> ShellCommand {
     ShellCommand {
         commands: vec![(
             Command {
                 name: literal(command),
-                args: args.iter().copied().map(literal).collect(),
+                args: args.iter().cloned().map(literal).collect(),
             },
             None,
         )],
@@ -29,22 +47,18 @@ fn shell(command: &str, args: &[&str], comment: Option<&str>) -> ShellCommand {
 }
 fn shell_parse(
     input: &str,
-) -> Result<
-    ShellCommand,
-    winnow::error::ParseError<&str, winnow::error::ContextError>,
-> {
-    super::shell_command.parse(input)
+) -> Result<ShellCommand, winnow::error::ParseError<LocatingSlice<&str>, ParseError>> {
+    super::shell_command.parse(LocatingSlice::new(input))
 }
 fn word_parse(
     input: &str,
-) -> Result<Word, winnow::error::ParseError<&str, winnow::error::ContextError>>
-{
-    super::word.parse(input)
+) -> Result<Spanned<Word>, winnow::error::ParseError<LocatingSlice<&str>, ParseError>> {
+    super::word.parse(LocatingSlice::new(input))
 }
 fn word_peek(
     input: &str,
-) -> Result<(&str, Word), winnow::error::ErrMode<winnow::error::ContextError>> {
-    super::word.parse_peek(input)
+) -> Result<(LocatingSlice<&str>, Spanned<Word>), winnow::error::ErrMode<ParseError>> {
+    super::word.parse_peek(LocatingSlice::new(input))
 }
 
 #[test]
@@ -54,7 +68,7 @@ fn double_quoted_string_test() {
             word_parse(concat!("\"", $input, "\""))
         };
     };
-    assert_eq!(word_parse!("hello"), Ok(literal("hello")));
+    assert_eq!(word_parse!("hello"), Ok(literal(("hello", 0..7))));
     assert_eq!(word_parse!("hello world"), Ok(literal("hello world")));
     assert_eq!(word_parse!(""), Ok(literal("")));
     assert_eq!(word_parse!(r"hello\nworld"), Ok(literal("hello\nworld")));

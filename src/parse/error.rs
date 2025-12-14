@@ -7,7 +7,7 @@ use winnow::{
 
 use super::{Input, Span};
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum ParseErrorKind {
     ParseHexError(std::num::ParseIntError),
     InvalidUnicode,
@@ -47,7 +47,7 @@ impl FromExternalError<Input<'_>, ParseErrorKind> for ParseErrorKind {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ParseError {
     pub kind: ParseErrorKind,
     // 範囲はむずいからとりあえず位置で
