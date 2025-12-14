@@ -128,26 +128,24 @@ fn escape_char(input: &mut Input) -> ModalResult<char> {
 }
 fn ident(input: &mut Input) -> ModalResult<String> {
     use unicode_ident::*;
-    take_till(0.., char::is_whitespace)
-        .try_map_with_span(|ident| {
-            // _ 単体や空はエラー
-            if ident == "_" || ident.is_empty() {
-                return Err(ParseErrorKind::InvalidIdent);
+    (
+        any.try_map_with_span(|c| {
+            if c == '_' || is_xid_start(c) {
+                Ok(c)
             }
-            for c in ident.chars().enumerate() {
-                match c {
-                    // 1文字目
-                    (0, '_') => {}
-                    (0, c) if is_xid_start(c) => {}
-                    // 2文字目以降
-                    (_, c) if is_xid_continue(c) => {}
-                    // エラー
-                    (_, _) => {
-                        return Err(ParseErrorKind::InvalidIdent);
-                    }
-                }
+            else {
+                Err(ParseErrorKind::NoIdent)
             }
-            Ok(ident.to_string())
+        }),
+        take_while(0.., is_xid_continue),
+    )
+        .try_map_with_span(|(ident_start, ident_continue)| {
+            if ident_start == '_' && ident_continue.is_empty() {
+                Err(ParseErrorKind::InvalidIdent)
+            }
+            else {
+                Ok(String::from(ident_start) + ident_continue)
+            }
         })
         .cut()
         .parse_next(input)

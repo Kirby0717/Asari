@@ -11,6 +11,7 @@ use super::{Input, Span};
 pub enum ParseErrorKind {
     ParseHexError(std::num::ParseIntError),
     InvalidUnicode,
+    NoIdent,
     InvalidIdent,
     UnrecognizedEscape(char),
     NoEndQuotation,
@@ -25,18 +26,21 @@ impl Display for ParseErrorKind {
             ParseHexError(e) => {
                 use std::num::IntErrorKind::*;
                 match *e.kind() {
-                    Empty => write!(f, "空です"),
+                    Empty => write!(f, "数値が空です"),
                     InvalidDigit => write!(f, "16進数で書いてください"),
-                    NegOverflow => write!(f, "小さすぎます"),
-                    PosOverflow => write!(f, "大きすぎます"),
+                    NegOverflow => write!(f, "数値が小さすぎます"),
+                    PosOverflow => write!(f, "数値が大きすぎます"),
                     _ => write!(f, "16進数の解析に失敗しました"),
                 }
             }
             InvalidUnicode => write!(f, "不正なUnicodeです"),
+            NoIdent => write!(f, "名前がありません"),
             InvalidIdent => write!(f, "不正な名前です"),
             UnrecognizedEscape(c) => write!(f, "不明なエスケープ \\{c} です"),
             NoEndQuotation => write!(f, "クォーテーションを閉じてください"),
-            NoEndDoubleQuotation => write!(f, "ダブルクォーテーションを閉じてください"),
+            NoEndDoubleQuotation => {
+                write!(f, "ダブルクォーテーションを閉じてください")
+            }
             e => write!(f, "不明なエラーです"),
         }
     }
