@@ -14,14 +14,15 @@ fn main() -> anyhow::Result<()> {
         let mut line = String::new();
         match stdin.read_line(&mut line) {
             Ok(_len) => {
-                use winnow::Parser;
-                let line = line.trim_end_matches(['\n', '\r']).to_string();
-                let parsed = parse::shell_command.parse(line.as_str());
-                //println!("{parsed:?}");
-                let Ok(command) = parsed
-                else {
-                    eprintln!("{}", parsed.unwrap_err());
-                    continue;
+                let line = line.trim_end_matches(['\n', '\r']);
+                let parsed = parse::parse_shell_command(&line);
+                let command = match parsed {
+                    Ok(command) => command,
+                    Err(e) => {
+                        let display = e.inner().display(e.input());
+                        eprintln!("{display}");
+                        continue;
+                    }
                 };
 
                 use exec::Error;

@@ -1,14 +1,52 @@
 #![allow(unused)]
-use std::fmt::Display;
+pub mod error;
+pub mod tools;
 
+use error::*;
+use std::fmt::Display;
+use tools::*;
 use winnow::{
+    LocatingSlice,
     combinator::{
-        alt, cut_err, delimited, dispatch, empty, fail, not, opt, peek,
-        preceded, repeat, separated, terminated, todo as todo_parser,
+        alt, delimited, dispatch, empty, fail, not, opt, peek, preceded,
+        repeat, todo as todo_parser,
     },
     prelude::*,
     token::{any, rest, take_till, take_until, take_while},
 };
+
+use crate::parse::tools::ParserExt;
+
+type Input<'i> = LocatingSlice<&'i str>;
+type Span = std::ops::Range<usize>;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Spanned<T> {
+    inner: T,
+    span: Span,
+}
+impl<T: PartialOrd> PartialOrd for Spanned<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.inner.partial_cmp(&other.inner)
+    }
+}
+impl<T: Ord> Ord for Spanned<T> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.inner.cmp(&other.inner)
+    }
+}
+impl<T: Display> Display for Spanned<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.inner.fmt(f)
+    }
+}
+
+fn spanned<T>(input: (T, Span)) -> Spanned<T> {
+    Spanned {
+        inner: input.0,
+        span: input.1,
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ShellCommand {
@@ -24,8 +62,8 @@ pub enum Pipe {
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Command {
-    pub name: Word,
-    pub args: Vec<Word>,
+    pub name: Spanned<Word>,
+    pub args: Vec<Spanned<Word>>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Word {
@@ -53,86 +91,133 @@ pub enum SpecialVar {
     ShellName,     // $@
 }
 
-fn space0(input: &mut &str) -> ModalResult<String> {
-    take_while(0.., char::is_whitespace)
-        .map(str::to_string)
-        .parse_next(input)
+type ModalResult<O> = winnow::ModalResult<O, ParseError>;
+
+fn space0<'a>(input: &mut Input<'a>) -> ModalResult<&'a str> {
+    take_while(0.., char::is_whitespace).parse_next(input)
 }
-fn space1(input: &mut &str) -> ModalResult<String> {
-    take_while(1.., char::is_whitespace)
-        .map(str::to_string)
-        .parse_next(input)
+fn space1<'a>(input: &mut Input<'a>) -> ModalResult<&'a str> {
+    take_while(1.., char::is_whitespace).parse_next(input)
 }
-fn unicode_number(input: &mut &str) -> ModalResult<char> {
-    take_while(1..=6, (('0'..='9'), ('A'..='F'), ('a'..='f')))
-        .verify_map(|num: &str| {
-            u32::from_str_radix(num, 16).ok().and_then(char::from_u32)
+fn unicode_number(input: &mut Input) -> ModalResult<char> {
+    take_until(0.., '}')
+        .map_err_with_span(|()| {
+            ParseErrorKind::InvalidUnicodeEscape(UnicodeEscapeError::NoEndBrace)
+        })
+        .try_map_with_span(|input| {
+            let code = u32::from_str_radix(input, 16)
+                .map_err(ParseErrorKind::ParseHexError)?;
+            char::from_u32(code).ok_or(ParseErrorKind::InvalidUnicodeEscape(
+                UnicodeEscapeError::InvalidUnicode,
+            ))
         })
         .parse_next(input)
 }
-fn escape_char(input: &mut &str) -> ModalResult<char> {
+fn unicode_escape_char(input: &mut Input) -> ModalResult<char> {
+    let _ = 'u'.parse_next(input)?;
+    let _ = '{'
+        .map_err_with_span(|()| {
+            ParseErrorKind::InvalidUnicodeEscape(
+                UnicodeEscapeError::NoBeginBrace,
+            )
+        })
+        .cut()
+        .parse_next(input)?;
+    let c = unicode_number.cut().parse_next(input)?;
+    let _ = '}'
+        .map_err_with_span(|()| {
+            ParseErrorKind::InvalidUnicodeEscape(UnicodeEscapeError::NoEndBrace)
+        })
+        .cut()
+        .parse_next(input)?;
+    Ok(c)
+}
+fn escape_char(input: &mut Input) -> ModalResult<char> {
     preceded(
         '\\',
-        dispatch!(any;
-            'n' => empty.value('\n'),
-            'r' => empty.value('\r'),
-            't' => empty.value('\t'),
-            'u' => cut_err(delimited('{', unicode_number, '}')),
-            '\\' => empty.value('\\'),
-            '\"' => empty.value('\"'),
-            '\'' => empty.value('\''),
-            '0' => empty.value('\0'),
-            _ => cut_err(fail)
+        dispatch!(peek(any);
+            'n' => any.value('\n'),
+            'r' => any.value('\r'),
+            't' => any.value('\t'),
+            'u' => unicode_escape_char,
+            '\\' => any.value('\\'),
+            '\"' => any.value('\"'),
+            '\'' => any.value('\''),
+            '0' => any.value('\0'),
+            c => any.try_map_with_span(|_| {
+                Err(ParseErrorKind::UnrecognizedEscape(c))
+            }).cut()
         ),
     )
     .parse_next(input)
 }
-fn ident(input: &mut &str) -> ModalResult<String> {
+fn ident(input: &mut Input) -> ModalResult<String> {
     use unicode_ident::*;
-    alt((
-        (
-            any.verify(|c: &char| is_xid_start(*c)),
-            take_while(0.., is_xid_continue),
-        ),
-        ('_', take_while(1.., is_xid_continue)),
-    ))
-    .map(|(start, r#continue)| String::from(start) + r#continue)
-    .parse_next(input)
+    (
+        any.map_err_with_span(|()| ParseErrorKind::NoIdent)
+            .try_map_with_span(|c| {
+                if c == '_' || is_xid_start(c) {
+                    Ok(c)
+                }
+                else {
+                    Err(ParseErrorKind::NoIdent)
+                }
+            }),
+        take_while(0.., is_xid_continue),
+    )
+        .try_map_with_span(|(ident_start, ident_continue)| {
+            if ident_start == '_' && ident_continue.is_empty() {
+                Err(ParseErrorKind::InvalidIdent)
+            }
+            else {
+                Ok(String::from(ident_start) + ident_continue)
+            }
+        })
+        .cut()
+        .parse_next(input)
 }
 
-pub fn shell_command(input: &mut &str) -> ModalResult<ShellCommand> {
-    *input = input.trim_start();
-    Ok(ShellCommand {
-        commands: repeat(
-            0..=1,
-            preceded(peek(not('#')), (command, empty.value(None))),
-        )
-        .parse_next(input)?,
-        //commands: repeat(0.., preceded(peek(not('#')), (command, opt(pipe)))).parse_next(input)?,
-        comment: opt(preceded(space0, comment)).parse_next(input)?,
-    })
+pub fn parse_shell_command(
+    input: &str,
+) -> Result<
+    ShellCommand,
+    winnow::error::ParseError<LocatingSlice<&str>, ParseError>,
+> {
+    shell_command.parse(Input::new(input))
 }
-fn pipe(input: &mut &str) -> ModalResult<Pipe> {
+fn shell_command(input: &mut Input) -> ModalResult<ShellCommand> {
+    let _ = space0.parse_next(input)?;
+    let commands = repeat(
+        0..=1,
+        preceded(peek(not('#')), (command, empty.value(None))),
+    )
+    .parse_next(input)?;
+    //commands: repeat(0.., preceded(peek(not('#')), (command, opt(pipe)))).parse_next(input)?,
+    let comment = opt(preceded(space0, comment)).parse_next(input)?;
+    let _ = space0.parse_next(input)?;
+    Ok(ShellCommand { commands, comment })
+}
+fn pipe(input: &mut Input) -> ModalResult<Pipe> {
     todo!()
 }
-fn comment(input: &mut &str) -> ModalResult<String> {
+fn comment(input: &mut Input) -> ModalResult<String> {
     preceded('#', rest).map(str::to_string).parse_next(input)
 }
-pub fn command(input: &mut &str) -> ModalResult<Command> {
+pub fn command(input: &mut Input) -> ModalResult<Command> {
     Ok(Command {
         name: word.parse_next(input)?,
         args: repeat(0.., preceded((space1, peek(not('#'))), word))
             .parse_next(input)?,
     })
 }
-fn word(input: &mut &str) -> ModalResult<Word> {
+fn word(input: &mut Input) -> ModalResult<Spanned<Word>> {
     dispatch!(peek(any);
         '\'' => quoted_string.map(Word::Literal),
         '"' => double_quoted_string.map(Word::Literal),
-        '$' => alt((
-            preceded('$', ident).map(Word::EnvVar),
+        '$' => preceded('$', alt((
             special_var.map(Word::SpecialVar),
-        )),
+            ident.map(Word::EnvVar),
+        ))),
         '%' => preceded('%', ident).map(Word::ShellVar),
         _ => alt((
             raw_string.map(Word::Literal),
@@ -140,27 +225,33 @@ fn word(input: &mut &str) -> ModalResult<Word> {
             unquoted_string.map(Word::Literal),
         ))
     )
+    .with_span()
+    .map(spanned)
     .parse_next(input)
 }
-fn quoted_string(input: &mut &str) -> ModalResult<String> {
+fn quoted_string(input: &mut Input) -> ModalResult<String> {
     const DELIMITER: char = '\'';
     delimited(
         DELIMITER,
         repeat(0.., alt((escape_char, any.verify(|c| *c != DELIMITER)))),
-        DELIMITER,
+        DELIMITER
+            .map_err_with_span(|()| ParseErrorKind::NoEndQuotation)
+            .cut(),
     )
     .parse_next(input)
 }
-fn double_quoted_string(input: &mut &str) -> ModalResult<String> {
+fn double_quoted_string(input: &mut Input) -> ModalResult<String> {
     const DELIMITER: char = '\"';
     delimited(
         DELIMITER,
         repeat(0.., alt((escape_char, any.verify(|c| *c != DELIMITER)))),
-        DELIMITER,
+        DELIMITER
+            .map_err_with_span(|()| ParseErrorKind::NoEndDoubleQuotation)
+            .cut(),
     )
     .parse_next(input)
 }
-fn raw_string(input: &mut &str) -> ModalResult<String> {
+fn raw_string(input: &mut Input) -> ModalResult<String> {
     let _ = 'r'.parse_next(input)?;
     let sharp = take_while(0.., '#').parse_next(input)?;
     let _ = '"'.parse_next(input)?;
@@ -169,7 +260,7 @@ fn raw_string(input: &mut &str) -> ModalResult<String> {
     let _ = delimiter.as_str().parse_next(input)?;
     Ok(raw.to_string())
 }
-fn path_string(input: &mut &str) -> ModalResult<String> {
+fn path_string(input: &mut Input) -> ModalResult<String> {
     let _ = 'p'.parse_next(input)?;
     let sharp = take_while(0.., '#').parse_next(input)?;
     let _ = '"'.parse_next(input)?;
@@ -178,13 +269,13 @@ fn path_string(input: &mut &str) -> ModalResult<String> {
     let _ = delimiter.as_str().parse_next(input)?;
     Ok(raw.to_string())
 }
-fn unquoted_string(input: &mut &str) -> ModalResult<String> {
+fn unquoted_string(input: &mut Input) -> ModalResult<String> {
     take_till(1.., |c: char| c.is_whitespace() || "(){}|<>;&".contains(c))
         .map(str::to_string)
         .parse_next(input)
 }
-fn special_var(input: &mut &str) -> ModalResult<SpecialVar> {
-    dispatch!(preceded('$', any);
+fn special_var(input: &mut Input) -> ModalResult<SpecialVar> {
+    dispatch!(any;
         '?' => empty.value(SpecialVar::ExitStatus),
         '$' => empty.value(SpecialVar::Pid),
         '!' => empty.value(SpecialVar::BackgroundPid),
