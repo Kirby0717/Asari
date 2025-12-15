@@ -49,6 +49,10 @@ fn shell(
         comment: comment.map(str::to_string),
     }
 }
+fn parse_error(kind: ParseErrorKind, span: usize) -> ParseError {
+    ParseError { kind, span }
+}
+
 fn shell_parse(
     input: &str,
 ) -> Result<
@@ -119,11 +123,38 @@ fn double_quoted_string_test() {
         Ok(literal(("line1\nline2\nline3", 0..21)))
     );
 
-    assert!(word_parse!(r"\x").is_err());
-    assert!(word_parse!(r"\u{GGGG}").is_err());
-    assert!(word_parse!(r"\u{110000}").is_err());
-    assert!(word_parse!(r"\u{}").is_err());
-    assert!(word_parse!(r"\u{1234567}").is_err());
+    assert_eq!(
+        word_parse!(r"\x").unwrap_err().into_inner(),
+        parse_error(ParseErrorKind::UnrecognizedEscape('x'), 2)
+    );
+    assert_eq!(
+        word_parse!(r"\u{GGGG}").unwrap_err().into_inner().kind,
+        ParseErrorKind::ParseHexError(
+            u32::from_str_radix("GGGG", 16).unwrap_err()
+        )
+    );
+    assert_eq!(
+        word_parse!(r"\u{110000}").unwrap_err().into_inner(),
+        parse_error(
+            ParseErrorKind::InvalidUnicodeEscape(
+                UnicodeEscapeError::InvalidUnicode
+            ),
+            4
+        )
+    );
+    assert_eq!(
+        word_parse!(r"\u{}").unwrap_err().into_inner().kind,
+        ParseErrorKind::ParseHexError(u32::from_str_radix("", 16).unwrap_err())
+    );
+    assert_eq!(
+        word_parse!(r"\u{1234567}").unwrap_err().into_inner(),
+        parse_error(
+            ParseErrorKind::InvalidUnicodeEscape(
+                UnicodeEscapeError::InvalidUnicode
+            ),
+            4
+        )
+    );
 }
 
 #[test]
@@ -350,16 +381,46 @@ fn var_test() {
     assert_eq!(word_parse("%café"), Ok(shell_var(("café", 0..6))));
 
     // 無効な変数名
-    assert!(word_parse("$123").is_err());
-    assert!(word_parse("$2var").is_err());
-    assert!(word_parse("$_").is_err());
-    assert!(word_parse("$").is_err());
-    assert!(word_parse("$-var").is_err());
-    assert!(word_parse("%123").is_err());
-    assert!(word_parse("%2var").is_err());
-    assert!(word_parse("%_").is_err());
-    assert!(word_parse("%").is_err());
-    assert!(word_parse("%-var").is_err());
+    assert_eq!(
+        word_parse("$123").unwrap_err().into_inner(),
+        parse_error(ParseErrorKind::NoIdent, 1)
+    );
+    assert_eq!(
+        word_parse("$2var").unwrap_err().into_inner(),
+        parse_error(ParseErrorKind::NoIdent, 1)
+    );
+    assert_eq!(
+        word_parse("$_").unwrap_err().into_inner(),
+        parse_error(ParseErrorKind::InvalidIdent, 1)
+    );
+    assert_eq!(
+        word_parse("$").unwrap_err().into_inner(),
+        parse_error(ParseErrorKind::NoIdent, 1)
+    );
+    assert_eq!(
+        word_parse("$-var").unwrap_err().into_inner(),
+        parse_error(ParseErrorKind::NoIdent, 1)
+    );
+    assert_eq!(
+        word_parse("%123").unwrap_err().into_inner(),
+        parse_error(ParseErrorKind::NoIdent, 1)
+    );
+    assert_eq!(
+        word_parse("%2var").unwrap_err().into_inner(),
+        parse_error(ParseErrorKind::NoIdent, 1)
+    );
+    assert_eq!(
+        word_parse("%_").unwrap_err().into_inner(),
+        parse_error(ParseErrorKind::InvalidIdent, 1)
+    );
+    assert_eq!(
+        word_parse("%").unwrap_err().into_inner(),
+        parse_error(ParseErrorKind::NoIdent, 1)
+    );
+    assert_eq!(
+        word_parse("%-var").unwrap_err().into_inner(),
+        parse_error(ParseErrorKind::NoIdent, 1)
+    );
 
     // 特殊変数
     assert_eq!(
@@ -375,9 +436,18 @@ fn var_test() {
         word_parse("$@"),
         Ok(special_var(SpecialVar::ShellName, 0..2))
     );
-    assert!(word_parse("$#").is_err());
-    assert!(word_parse("$*").is_err());
-    assert!(word_parse("$%").is_err());
+    assert_eq!(
+        word_parse("$#").unwrap_err().into_inner(),
+        parse_error(ParseErrorKind::NoIdent, 1)
+    );
+    assert_eq!(
+        word_parse("$*").unwrap_err().into_inner(),
+        parse_error(ParseErrorKind::NoIdent, 1)
+    );
+    assert_eq!(
+        word_parse("$%").unwrap_err().into_inner(),
+        parse_error(ParseErrorKind::NoIdent, 1)
+    );
 
     // 変数の境目
     assert_eq!(

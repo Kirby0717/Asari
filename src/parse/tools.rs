@@ -25,6 +25,9 @@ pub trait ParserExt<I, O, E>: Parser<I, O, E> {
             e: PhantomData,
         }
     }
+}
+impl<I, O, E, P: Parser<I, O, ErrMode<E>>> ParserModalExt<I, O, E> for P {}
+pub trait ParserModalExt<I, O, E>: Parser<I, O, ErrMode<E>> {
     #[inline(always)]
     fn map_err_with_span<G>(
         self,

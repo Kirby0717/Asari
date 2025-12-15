@@ -14,6 +14,7 @@ fn main() -> anyhow::Result<()> {
         let mut line = String::new();
         match stdin.read_line(&mut line) {
             Ok(_len) => {
+                let line = line.trim_end_matches(['\n', '\r']);
                 let parsed = parse::parse_shell_command(&line);
                 println!("{parsed:?}");
                 let command = match parsed {

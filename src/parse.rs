@@ -4,7 +4,7 @@ pub mod tools;
 
 use error::*;
 use std::fmt::{Display, write};
-use tools::ParserSpanExt;
+use tools::*;
 use winnow::{
     LocatingSlice,
     combinator::{
@@ -102,12 +102,41 @@ fn space1<'a>(input: &mut Input<'a>) -> ModalResult<&'a str> {
 }
 fn unicode_number(input: &mut Input) -> ModalResult<char> {
     take_until(0.., '}')
+        .map_err_with_span(|()| {
+            ParseErrorKind::InvalidUnicodeEscape(UnicodeEscapeError::NoEndBrace)
+        })
         .try_map_with_span(|input| {
+            eprintln!("{input}");
             let code = u32::from_str_radix(input, 16)
+                .inspect_err(|e| eprintln!("{e}"))
                 .map_err(ParseErrorKind::ParseHexError)?;
-            char::from_u32(code).ok_or(ParseErrorKind::InvalidUnicode)
+            char::from_u32(code).ok_or(ParseErrorKind::InvalidUnicodeEscape(
+                UnicodeEscapeError::InvalidUnicode,
+            ))
         })
         .parse_next(input)
+}
+fn unicode_escape_char(input: &mut Input) -> ModalResult<char> {
+    let _ = 'u'.parse_next(input)?;
+    let _ = '{'
+        .map_err_with_span(|()| {
+            ParseErrorKind::InvalidUnicodeEscape(
+                UnicodeEscapeError::NoBeginBrace,
+            )
+        })
+        .cut()
+        .parse_next(input)?;
+    let c = unicode_number
+        .cut()
+        .parse_next(input)
+        .inspect_err(|e| eprintln!("{e}"))?;
+    let _ = '}'
+        .map_err_with_span(|()| {
+            ParseErrorKind::InvalidUnicodeEscape(UnicodeEscapeError::NoEndBrace)
+        })
+        .cut()
+        .parse_next(input)?;
+    Ok(c)
 }
 fn escape_char(input: &mut Input) -> ModalResult<char> {
     preceded(
@@ -116,12 +145,14 @@ fn escape_char(input: &mut Input) -> ModalResult<char> {
             'n' => any.value('\n'),
             'r' => any.value('\r'),
             't' => any.value('\t'),
-            'u' => delimited("u{", unicode_number, '}').cut(),
+            'u' => unicode_escape_char,
             '\\' => any.value('\\'),
             '\"' => any.value('\"'),
             '\'' => any.value('\''),
             '0' => any.value('\0'),
-            c => any.try_map_with_span(|_| Err(ParseErrorKind::UnrecognizedEscape(c))).cut()
+            c => any.try_map_with_span(|_| {
+                Err(ParseErrorKind::UnrecognizedEscape(c))
+            }).cut()
         ),
     )
     .parse_next(input)
@@ -129,14 +160,15 @@ fn escape_char(input: &mut Input) -> ModalResult<char> {
 fn ident(input: &mut Input) -> ModalResult<String> {
     use unicode_ident::*;
     (
-        any.try_map_with_span(|c| {
-            if c == '_' || is_xid_start(c) {
-                Ok(c)
-            }
-            else {
-                Err(ParseErrorKind::NoIdent)
-            }
-        }),
+        any.map_err_with_span(|()| ParseErrorKind::NoIdent)
+            .try_map_with_span(|c| {
+                if c == '_' || is_xid_start(c) {
+                    Ok(c)
+                }
+                else {
+                    Err(ParseErrorKind::NoIdent)
+                }
+            }),
         take_while(0.., is_xid_continue),
     )
         .try_map_with_span(|(ident_start, ident_continue)| {
@@ -208,10 +240,10 @@ fn quoted_string(input: &mut Input) -> ModalResult<String> {
     delimited(
         DELIMITER,
         repeat(0.., alt((escape_char, any.verify(|c| *c != DELIMITER)))),
-        DELIMITER,
+        DELIMITER
+            .map_err_with_span(|()| ParseErrorKind::NoEndQuotation)
+            .cut(),
     )
-    .map_err_with_span(|_| ParseErrorKind::NoEndQuotation)
-    .cut()
     .parse_next(input)
 }
 fn double_quoted_string(input: &mut Input) -> ModalResult<String> {
@@ -219,10 +251,10 @@ fn double_quoted_string(input: &mut Input) -> ModalResult<String> {
     delimited(
         DELIMITER,
         repeat(0.., alt((escape_char, any.verify(|c| *c != DELIMITER)))),
-        DELIMITER,
+        DELIMITER
+            .map_err_with_span(|()| ParseErrorKind::NoEndDoubleQuotation)
+            .cut(),
     )
-    .map_err_with_span(|_| ParseErrorKind::NoEndDoubleQuotation)
-    .cut()
     .parse_next(input)
 }
 fn raw_string(input: &mut Input) -> ModalResult<String> {

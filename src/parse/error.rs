@@ -10,14 +10,20 @@ use super::{Input, Span};
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum ParseErrorKind {
     ParseHexError(std::num::ParseIntError),
-    InvalidUnicode,
     NoIdent,
     InvalidIdent,
+    InvalidUnicodeEscape(UnicodeEscapeError),
     UnrecognizedEscape(char),
     NoEndQuotation,
     NoEndDoubleQuotation,
     #[default]
     Other,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UnicodeEscapeError {
+    NoBeginBrace,
+    InvalidUnicode,
+    NoEndBrace,
 }
 impl Display for ParseErrorKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -33,7 +39,14 @@ impl Display for ParseErrorKind {
                     _ => write!(f, "16進数の解析に失敗しました"),
                 }
             }
-            InvalidUnicode => write!(f, "不正なUnicodeです"),
+            InvalidUnicodeEscape(e) => {
+                use UnicodeEscapeError::*;
+                match e {
+                    NoBeginBrace => write!(f, "{{が必要です"),
+                    InvalidUnicode => write!(f, "不正なUnicodeです"),
+                    NoEndBrace => write!(f, "}}が必要です"),
+                }
+            }
             NoIdent => write!(f, "名前がありません"),
             InvalidIdent => write!(f, "不正な名前です"),
             UnrecognizedEscape(c) => write!(f, "不明なエスケープ \\{c} です"),

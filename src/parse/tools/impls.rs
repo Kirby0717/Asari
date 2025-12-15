@@ -31,7 +31,7 @@ where
 
 pub struct MapErrWithSpan<F, G, I, O, E>
 where
-    F: Parser<I, O, E>,
+    F: Parser<I, O, ErrMode<E>>,
     G: FnMut(E) -> ParseErrorKind,
     I: Location,
 {
@@ -44,22 +44,20 @@ where
 impl<F, G, I, O, E> Parser<I, O, ErrMode<ParseError>>
     for MapErrWithSpan<F, G, I, O, E>
 where
-    F: Parser<I, O, E>,
+    F: Parser<I, O, ErrMode<E>>,
     G: FnMut(E) -> ParseErrorKind,
     I: Location,
 {
     #[inline]
     fn parse_next(&mut self, input: &mut I) -> ModalResult<O, ParseError> {
         let begin = input.current_token_start();
-        let result = self.parser.parse_next(input);
         //let span = begin..input.previous_token_end();
-        match result {
-            Err(e) => Err(ErrMode::Backtrack(ParseError {
+        self.parser.parse_next(input).map_err(|e| {
+            e.map(|e| ParseError {
                 kind: (self.map)(e),
                 span: begin,
-            })),
-            Ok(o) => Ok(o),
-        }
+            })
+        })
     }
 }
 
