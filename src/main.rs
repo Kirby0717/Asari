@@ -16,7 +16,6 @@ fn main() -> anyhow::Result<()> {
             Ok(_len) => {
                 let line = line.trim_end_matches(['\n', '\r']);
                 let parsed = parse::parse_shell_command(&line);
-                println!("{parsed:?}");
                 let command = match parsed {
                     Ok(command) => command,
                     Err(e) => {
@@ -25,7 +24,6 @@ fn main() -> anyhow::Result<()> {
                         continue;
                     }
                 };
-                continue;
 
                 use exec::Error;
                 match shell.execute(&command) {
