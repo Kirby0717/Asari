@@ -2,7 +2,6 @@ use crate::parse::error::*;
 use std::marker::PhantomData;
 use winnow::{
     ModalResult, Parser,
-    combinator::{cut_err, impls::TryMap},
     error::{ErrMode, FromExternalError, ModalError, ParserError},
     stream::{Location, Stream},
 };

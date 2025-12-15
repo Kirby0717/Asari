@@ -3,8 +3,7 @@ mod impls;
 use crate::parse::error::*;
 use std::marker::PhantomData;
 use winnow::{
-    ModalResult, Parser,
-    combinator::impls::TryMap,
+    Parser,
     error::{ErrMode, FromExternalError, ModalError, ParserError},
     stream::{Location, Stream},
 };

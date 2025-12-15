@@ -1,11 +1,11 @@
 use std::fmt::Display;
 
 use winnow::{
-    error::{AddContext, FromExternalError, ParserError},
+    error::{FromExternalError, ParserError},
     stream::Location,
 };
 
-use super::{Input, Span};
+use super::Input;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum ParseErrorKind {
@@ -54,12 +54,12 @@ impl Display for ParseErrorKind {
             NoEndDoubleQuotation => {
                 write!(f, "ダブルクォーテーションを閉じてください")
             }
-            e => write!(f, "不明なエラーです"),
+            e => write!(f, "不明なエラーです: {e}"),
         }
     }
 }
 impl FromExternalError<Input<'_>, ParseErrorKind> for ParseErrorKind {
-    fn from_external_error(input: &Input<'_>, e: ParseErrorKind) -> Self {
+    fn from_external_error(_input: &Input<'_>, e: ParseErrorKind) -> Self {
         e
     }
 }

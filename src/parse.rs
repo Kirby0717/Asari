@@ -3,16 +3,15 @@ pub mod error;
 pub mod tools;
 
 use error::*;
-use std::fmt::{Display, write};
+use std::fmt::Display;
 use tools::*;
 use winnow::{
     LocatingSlice,
     combinator::{
         alt, delimited, dispatch, empty, fail, not, opt, peek, preceded,
-        repeat, separated, terminated, todo as todo_parser,
+        repeat, todo as todo_parser,
     },
     prelude::*,
-    stream::{Location, Offset},
     token::{any, rest, take_till, take_until, take_while},
 };
 
@@ -106,9 +105,7 @@ fn unicode_number(input: &mut Input) -> ModalResult<char> {
             ParseErrorKind::InvalidUnicodeEscape(UnicodeEscapeError::NoEndBrace)
         })
         .try_map_with_span(|input| {
-            eprintln!("{input}");
             let code = u32::from_str_radix(input, 16)
-                .inspect_err(|e| eprintln!("{e}"))
                 .map_err(ParseErrorKind::ParseHexError)?;
             char::from_u32(code).ok_or(ParseErrorKind::InvalidUnicodeEscape(
                 UnicodeEscapeError::InvalidUnicode,
@@ -126,10 +123,7 @@ fn unicode_escape_char(input: &mut Input) -> ModalResult<char> {
         })
         .cut()
         .parse_next(input)?;
-    let c = unicode_number
-        .cut()
-        .parse_next(input)
-        .inspect_err(|e| eprintln!("{e}"))?;
+    let c = unicode_number.cut().parse_next(input)?;
     let _ = '}'
         .map_err_with_span(|()| {
             ParseErrorKind::InvalidUnicodeEscape(UnicodeEscapeError::NoEndBrace)
