@@ -28,6 +28,36 @@ where
     }
 }
 
+pub struct Spanned<F, I, O, E>
+where
+    F: Parser<I, O, E>,
+    I: Stream + Location,
+{
+    pub(crate) parser: F,
+    pub(crate) i: PhantomData<I>,
+    pub(crate) o: PhantomData<O>,
+    pub(crate) e: PhantomData<E>,
+}
+impl<F, I, O, E> Parser<I, crate::parse::Spanned<O>, E> for Spanned<F, I, O, E>
+where
+    F: Parser<I, O, E>,
+    I: Stream + Location,
+{
+    fn parse_next(
+        &mut self,
+        input: &mut I,
+    ) -> winnow::Result<crate::parse::Spanned<O>, E> {
+        let start = input.current_token_start();
+        self.parser.parse_next(input).map(move |output| {
+            let end = input.previous_token_end();
+            crate::parse::Spanned {
+                inner: output,
+                span: start..end,
+            }
+        })
+    }
+}
+
 pub struct MapErrWithSpan<F, G, I, O, E>
 where
     F: Parser<I, O, ErrMode<E>>,

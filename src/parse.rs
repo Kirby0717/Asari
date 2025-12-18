@@ -41,13 +41,6 @@ impl<T: Display> Display for Spanned<T> {
     }
 }
 
-fn spanned<T>(input: (T, Span)) -> Spanned<T> {
-    Spanned {
-        inner: input.0,
-        span: input.1,
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ShellCommand {
     pub commands: Vec<(Command, Option<Pipe>)>,
@@ -92,6 +85,7 @@ pub enum SpecialVar {
 }
 
 type ModalResult<O> = winnow::ModalResult<O, ParseError>;
+type SpannedResult<O> = ModalResult<Spanned<O>>;
 
 fn space0<'a>(input: &mut Input<'a>) -> ModalResult<&'a str> {
     take_while(0.., char::is_whitespace).parse_next(input)
@@ -210,7 +204,12 @@ pub fn command(input: &mut Input) -> ModalResult<Command> {
             .parse_next(input)?,
     })
 }
-fn word(input: &mut Input) -> ModalResult<Spanned<Word>> {
+
+fn simple_expr(input: &mut Input) -> SpannedResult<Word> {
+    todo!()
+}
+
+fn word(input: &mut Input) -> SpannedResult<Word> {
     dispatch!(peek(any);
         '\'' => quoted_string.map(Word::Literal),
         '"' => double_quoted_string.map(Word::Literal),
@@ -225,8 +224,7 @@ fn word(input: &mut Input) -> ModalResult<Spanned<Word>> {
             unquoted_string.map(Word::Literal),
         ))
     )
-    .with_span()
-    .map(spanned)
+    .spanned()
     .parse_next(input)
 }
 fn quoted_string(input: &mut Input) -> ModalResult<String> {
