@@ -1,4 +1,3 @@
-#![allow(unused)]
 pub mod error;
 pub mod tools;
 
@@ -12,18 +11,29 @@ use winnow::{
         repeat, todo as todo_parser,
     },
     prelude::*,
-    token::{any, rest, take_till, take_until, take_while},
+    token::{any, one_of, rest, take_till, take_until, take_while},
 };
 
 use crate::parse::tools::ParserExt;
 
-type Input<'i> = LocatingSlice<&'i str>;
+pub type Input<'i> = LocatingSlice<&'i str>;
 type Span = std::ops::Range<usize>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Spanned<T> {
     inner: T,
     span: Span,
+}
+impl<T> Spanned<T> {
+    pub fn map<U, F>(self, f: F) -> Spanned<U>
+    where
+        F: FnOnce(T) -> U,
+    {
+        Spanned {
+            inner: f(self.inner),
+            span: self.span,
+        }
+    }
 }
 impl<T: PartialOrd> PartialOrd for Spanned<T> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
@@ -55,21 +65,40 @@ pub enum Pipe {
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Command {
-    pub name: Spanned<Word>,
-    pub args: Vec<Spanned<Word>>,
+    pub name: Spanned<Primary>,
+    pub args: Vec<Spanned<Primary>>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Word {
-    Literal(String),
-    // とりあえずStringで
-    PathLiteral(String),
-    SpecialVar(SpecialVar),
-    EnvVar(String),
-    ShellVar(String),
+enum Postfix {
+    Unwrap,               // !
+    IsSome,               // ?
+    Length,               // @
+    Index(Spanned<Expr>), //[expr]
 }
-impl Display for Word {
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Expr {
+    Primary(Spanned<Primary>),
+    Array(Vec<Spanned<Expr>>),  // [e1, e2, ... , ek]
+    Unwrap(Box<Spanned<Expr>>), // expr!
+    IsSome(Box<Spanned<Expr>>), // expr?
+    Length(Box<Spanned<Expr>>), // expr@
+    Index(Box<Spanned<Expr>>, Box<Spanned<Expr>>), // expr1[expr2]
+    UnwrapOr(Box<Spanned<Expr>>, Box<Spanned<Expr>>), // expr1^expr2
+}
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+// とりあえずStringで
+pub enum Primary {
+    Literal(String),           // "abc", 'abc', r"abc"
+    PathLiteral(String),       // p"abc"
+    SpecialVar(SpecialVar),    // $?, $$, $!, $@
+    EnvVar(String),            // $abc
+    ShellVar(String),          // %abs
+    Paren(Box<Spanned<Expr>>), // (expr)
+    Unit,                      // ()
+}
+impl Display for Primary {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use Word::*;
+        use Primary::*;
         match self {
             Literal(literal) => write!(f, "{literal}"),
             _ => todo!(),
@@ -140,7 +169,7 @@ fn escape_char(input: &mut Input) -> ModalResult<char> {
             '0' => any.value('\0'),
             c => any.try_map_with_span(|_| {
                 Err(ParseErrorKind::UnrecognizedEscape(c))
-            }).cut()
+            }).cut(),
         ),
     )
     .parse_next(input)
@@ -191,7 +220,7 @@ fn shell_command(input: &mut Input) -> ModalResult<ShellCommand> {
     let _ = space0.parse_next(input)?;
     Ok(ShellCommand { commands, comment })
 }
-fn pipe(input: &mut Input) -> ModalResult<Pipe> {
+fn pipe(_input: &mut Input) -> ModalResult<Pipe> {
     todo!()
 }
 fn comment(input: &mut Input) -> ModalResult<String> {
@@ -199,30 +228,105 @@ fn comment(input: &mut Input) -> ModalResult<String> {
 }
 pub fn command(input: &mut Input) -> ModalResult<Command> {
     Ok(Command {
-        name: word.parse_next(input)?,
-        args: repeat(0.., preceded((space1, peek(not('#'))), word))
+        name: primary.parse_next(input)?,
+        args: repeat(0.., preceded((space1, peek(not('#'))), primary))
             .parse_next(input)?,
     })
 }
 
-fn simple_expr(input: &mut Input) -> SpannedResult<Word> {
+fn simple_expr_primary(input: &mut Input) -> SpannedResult<Primary> {
+    dispatch!(peek(any);
+        '\'' => quoted_string.map(Primary::Literal),
+        '"' => double_quoted_string.map(Primary::Literal),
+        '$' => preceded('$', alt((
+            special_var.map(Primary::SpecialVar),
+            ident.map(Primary::EnvVar),
+        ))),
+        '%' => preceded('%', ident).map(Primary::ShellVar),
+        '(' => alt((
+            ('(', space0, ')').value(Primary::Unit),
+            delimited(('(', space0), expr, (space0, ')'))
+                .map(|expr| Primary::Paren(Box::new(expr)))
+        )),
+        'r' => raw_string.map(Primary::Literal),
+        'p' =>path_string.map(Primary::PathLiteral),
+        _ => fail,
+    )
+    .spanned()
+    .parse_next(input)
+}
+fn simple_expr_postfix(input: &mut Input) -> SpannedResult<Postfix> {
+    dispatch!(any;
+        '!' => empty.value(Postfix::Unwrap),
+        '?' => empty.value(Postfix::IsSome),
+        '@' => empty.value(Postfix::Length),
+        '[' => delimited(space0, expr, (space0, ']')).map(Postfix::Index),
+        _ => fail,
+    )
+    .spanned()
+    .parse_next(input)
+}
+pub fn simple_expr(input: &mut Input) -> SpannedResult<Expr> {
+    let primary = simple_expr_primary.parse_next(input)?;
+    let mut lhs = Spanned {
+        span: primary.span.clone(),
+        inner: Expr::Primary(primary),
+    };
+    loop {
+        // 後置演算子
+        if input
+            .as_bytes()
+            .first()
+            .is_some_and(|c| b"!?@[".contains(c))
+        {
+            let op = simple_expr_postfix.parse_next(input)?;
+            use Postfix::*;
+            lhs = Spanned {
+                span: lhs.span.start..op.span.end,
+                inner: match op.inner {
+                    Unwrap => Expr::Unwrap(Box::new(lhs)),
+                    IsSome => Expr::IsSome(Box::new(lhs)),
+                    Length => Expr::Length(Box::new(lhs)),
+                    Index(index) => Expr::Index(Box::new(lhs), Box::new(index)),
+                },
+            };
+            continue;
+        }
+
+        // 中置演算子
+        if opt('^').parse_next(input)?.is_some() {
+            let rhs = simple_expr.parse_next(input)?;
+            lhs = Spanned {
+                span: lhs.span.start..rhs.span.end,
+                inner: Expr::UnwrapOr(Box::new(lhs), Box::new(rhs)),
+            };
+            continue;
+        }
+
+        break;
+    }
+    Ok(lhs)
+}
+fn expr(input: &mut Input) -> SpannedResult<Expr> {
+    //use winnow::combinator::{Infix, Postfix, Prefix, expression};
     todo!()
 }
 
-fn word(input: &mut Input) -> SpannedResult<Word> {
+fn primary(input: &mut Input) -> SpannedResult<Primary> {
     dispatch!(peek(any);
-        '\'' => quoted_string.map(Word::Literal),
-        '"' => double_quoted_string.map(Word::Literal),
+        '\'' => quoted_string.map(Primary::Literal),
+        '"' => double_quoted_string.map(Primary::Literal),
         '$' => preceded('$', alt((
-            special_var.map(Word::SpecialVar),
-            ident.map(Word::EnvVar),
+            special_var.map(Primary::SpecialVar),
+            ident.map(Primary::EnvVar),
         ))),
-        '%' => preceded('%', ident).map(Word::ShellVar),
+        '%' => preceded('%', ident).map(Primary::ShellVar),
+        '(' => "()".value(Primary::Unit),
         _ => alt((
-            raw_string.map(Word::Literal),
-            path_string.map(Word::PathLiteral),
-            unquoted_string.map(Word::Literal),
-        ))
+            raw_string.map(Primary::Literal),
+            path_string.map(Primary::PathLiteral),
+            unquoted_string.map(Primary::Literal),
+        )),
     )
     .spanned()
     .parse_next(input)

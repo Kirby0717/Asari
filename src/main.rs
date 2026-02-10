@@ -15,6 +15,12 @@ fn main() -> anyhow::Result<()> {
         match stdin.read_line(&mut line) {
             Ok(_len) => {
                 let line = line.trim_end_matches(['\n', '\r']);
+                if true {
+                    let parsed =
+                        parse::simple_expr(&mut parse::Input::new(line));
+                    println!("{parsed:?}");
+                    continue;
+                }
                 let parsed = parse::parse_shell_command(&line);
                 let command = match parsed {
                     Ok(command) => command,

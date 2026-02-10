@@ -1,4 +1,3 @@
-#![allow(unused)]
 use crate::parse::ShellCommand;
 use std::{ffi::OsString, fmt::Display, path::PathBuf};
 
@@ -24,7 +23,6 @@ impl Shell {
     }
     pub fn execute(&mut self, cmd: &ShellCommand) -> Result<()> {
         use crate::builtin::Error as BuiltinError;
-        use crate::parse::Word;
         for (command, _pipe) in &cmd.commands {
             let name = command.name.to_string();
             let args: Vec<_> =
@@ -47,7 +45,7 @@ impl Shell {
                     "コマンドが見つかりませんでした".to_string(),
                 ));
             };
-            let status =
+            let _status =
                 match std::process::Command::new(name).args(args).status() {
                     Ok(status) => status,
                     Err(e) => return Err(Error::CommandError(e.to_string())),

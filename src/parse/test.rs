@@ -3,33 +3,33 @@ use winnow::LocatingSlice;
 
 type SpannedInput<'a> = (&'a str, Span);
 
-fn literal(literal: SpannedInput) -> Spanned<Word> {
+fn literal(literal: SpannedInput) -> Spanned<Primary> {
     Spanned {
-        inner: Word::Literal(literal.0.to_string()),
+        inner: Primary::Literal(literal.0.to_string()),
         span: literal.1,
     }
 }
-fn path_literal(path_literal: SpannedInput) -> Spanned<Word> {
+fn path_literal(path_literal: SpannedInput) -> Spanned<Primary> {
     Spanned {
-        inner: Word::PathLiteral(path_literal.0.to_string()),
+        inner: Primary::PathLiteral(path_literal.0.to_string()),
         span: path_literal.1,
     }
 }
-fn env_var(var: SpannedInput) -> Spanned<Word> {
+fn env_var(var: SpannedInput) -> Spanned<Primary> {
     Spanned {
-        inner: Word::EnvVar(var.0.to_string()),
+        inner: Primary::EnvVar(var.0.to_string()),
         span: var.1,
     }
 }
-fn shell_var(var: SpannedInput) -> Spanned<Word> {
+fn shell_var(var: SpannedInput) -> Spanned<Primary> {
     Spanned {
-        inner: Word::ShellVar(var.0.to_string()),
+        inner: Primary::ShellVar(var.0.to_string()),
         span: var.1,
     }
 }
-fn special_var(var: SpecialVar, span: Span) -> Spanned<Word> {
+fn special_var(var: SpecialVar, span: Span) -> Spanned<Primary> {
     Spanned {
-        inner: Word::SpecialVar(var),
+        inner: Primary::SpecialVar(var),
         span,
     }
 }
@@ -64,15 +64,15 @@ fn shell_parse(
 fn word_parse(
     input: &str,
 ) -> Result<
-    Spanned<Word>,
+    Spanned<Primary>,
     winnow::error::ParseError<LocatingSlice<&str>, ParseError>,
 > {
-    super::word.parse(LocatingSlice::new(input))
+    super::primary.parse(LocatingSlice::new(input))
 }
 fn word_peek(
     input: &str,
-) -> Result<(&str, Spanned<Word>), winnow::error::ErrMode<ParseError>> {
-    super::word
+) -> Result<(&str, Spanned<Primary>), winnow::error::ErrMode<ParseError>> {
+    super::primary
         .parse_peek(LocatingSlice::new(input))
         .map(|(rest, result)| (*rest.as_ref(), result))
 }
