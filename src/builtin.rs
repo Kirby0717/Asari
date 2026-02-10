@@ -1,4 +1,3 @@
-#![allow(unused)]
 use std::fmt::Display;
 
 #[derive(Clone, Debug)]
@@ -17,11 +16,28 @@ type Result<T> = ::std::result::Result<T, Error>;
 
 pub fn run(name: &str, args: &[String]) -> Result<i32> {
     match name {
+        "echo" => echo(args),
         "cd" => cd(args),
         "exit" => exit(args),
         "mkdir" => mkdir(args),
         _ => Err(Error::CommandNotFound),
     }
+}
+fn echo(args: &[String]) -> Result<i32> {
+    use std::io::{BufWriter, Write};
+
+    let stdout = std::io::stdout();
+    let mut writer = BufWriter::new(stdout.lock());
+
+    let mut iter = args.iter();
+    if let Some(first) = iter.next() {
+        let _ = write!(writer, "{first}");
+        for arg in iter {
+            let _ = write!(writer, " {arg}");
+        }
+    }
+    let _ = writeln!(writer);
+    Ok(0)
 }
 fn cd(args: &[String]) -> Result<i32> {
     if 1 < args.len() {
@@ -74,7 +90,6 @@ fn mkdir(args: &[String]) -> Result<i32> {
 
     let mut exit_status = 0;
     for dir in args {
-        use std::io::ErrorKind;
         match std::fs::create_dir_all(dir) {
             Ok(_) => {}
             Err(e) => {
