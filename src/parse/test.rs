@@ -5,13 +5,13 @@ type SpannedInput<'a> = (&'a str, Span);
 
 fn literal(literal: SpannedInput) -> Spanned<Primary> {
     Spanned {
-        inner: Primary::Literal(literal.0.to_string()),
+        inner: Primary::String(literal.0.to_string()),
         span: literal.1,
     }
 }
 fn path_literal(path_literal: SpannedInput) -> Spanned<Primary> {
     Spanned {
-        inner: Primary::PathLiteral(path_literal.0.to_string()),
+        inner: Primary::PathString(path_literal.0.to_string()),
         span: path_literal.1,
     }
 }

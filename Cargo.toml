@@ -9,4 +9,7 @@ anyhow = "1"
 clap = "4"
 dirs = "6"
 unicode-ident = "1"
-winnow = "0.7"
+
+[dependencies.winnow]
+version = "0.7"
+#features = ["debug"]
