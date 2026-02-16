@@ -1,3 +1,5 @@
+#![allow(unused)]
+use crate::eval::*;
 use crate::parse::ShellCommand;
 use std::{ffi::OsString, fmt::Display, path::PathBuf};
 
@@ -15,7 +17,7 @@ type Result<T> = ::std::result::Result<T, Error>;
 
 #[derive(Clone, Debug, Default)]
 pub struct Shell {
-    last_status: Option<i32>,
+    context: Context,
 }
 impl Shell {
     pub fn new() -> Self {
@@ -23,8 +25,8 @@ impl Shell {
     }
     pub fn execute(&mut self, cmd: &ShellCommand) -> Result<()> {
         use crate::builtin::Error as BuiltinError;
-        for (command, _pipe) in &cmd.commands {
-            let name = command.name.to_string();
+        /*for (command, _pipe) in &cmd.commands {
+            let name = eval_expr(command.name).unwrap();
             let args: Vec<_> =
                 command.args.iter().map(ToString::to_string).collect();
 
@@ -50,7 +52,7 @@ impl Shell {
                     Ok(status) => status,
                     Err(e) => return Err(Error::CommandError(e.to_string())),
                 };
-        }
+        }*/
         Ok(())
     }
 }

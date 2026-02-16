@@ -9,6 +9,9 @@ use super::Input;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum ParseErrorKind {
+    ParseBinError(std::num::ParseIntError),
+    ParseOctError(std::num::ParseIntError),
+    ParseDecError(std::num::ParseIntError),
     ParseHexError(std::num::ParseIntError),
     NoIdent,
     InvalidIdent,
@@ -29,6 +32,36 @@ impl Display for ParseErrorKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use ParseErrorKind::*;
         match self {
+            ParseBinError(e) => {
+                use std::num::IntErrorKind::*;
+                match *e.kind() {
+                    Empty => write!(f, "数値が空です"),
+                    InvalidDigit => write!(f, "2進数で書いてください"),
+                    NegOverflow => write!(f, "数値が小さすぎます"),
+                    PosOverflow => write!(f, "数値が大きすぎます"),
+                    _ => write!(f, "2進数の解析に失敗しました"),
+                }
+            }
+            ParseOctError(e) => {
+                use std::num::IntErrorKind::*;
+                match *e.kind() {
+                    Empty => write!(f, "数値が空です"),
+                    InvalidDigit => write!(f, "8進数で書いてください"),
+                    NegOverflow => write!(f, "数値が小さすぎます"),
+                    PosOverflow => write!(f, "数値が大きすぎます"),
+                    _ => write!(f, "8進数の解析に失敗しました"),
+                }
+            }
+            ParseDecError(e) => {
+                use std::num::IntErrorKind::*;
+                match *e.kind() {
+                    Empty => write!(f, "数値が空です"),
+                    InvalidDigit => write!(f, "10進数で書いてください"),
+                    NegOverflow => write!(f, "数値が小さすぎます"),
+                    PosOverflow => write!(f, "数値が大きすぎます"),
+                    _ => write!(f, "10進数の解析に失敗しました"),
+                }
+            }
             ParseHexError(e) => {
                 use std::num::IntErrorKind::*;
                 match *e.kind() {

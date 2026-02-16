@@ -1,6 +1,8 @@
 mod builtin;
 mod exec;
 mod parse;
+mod value;
+mod eval;
 
 fn main() -> anyhow::Result<()> {
     welcome();
@@ -18,6 +20,10 @@ fn main() -> anyhow::Result<()> {
                 if true {
                     let parsed =
                         parse::simple_expr(&mut parse::Input::new(line));
+                    if let Ok(expr) = &parsed {
+                        let value = eval::eval_expr(expr, &Default::default());
+                        println!("{value:?}");
+                    }
                     println!("{parsed:?}");
                     continue;
                 }

@@ -1,3 +1,4 @@
+#![allow(unused)]
 use std::fmt::Display;
 
 #[derive(Clone, Debug)]
