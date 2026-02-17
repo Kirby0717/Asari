@@ -10,7 +10,80 @@ pub enum Value {
     Option(Option<Box<Value>>),
     Unit,
 }
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
+pub enum Type {
+    String,
+    Int,
+    Float,
+    Bool,
+    Array(Box<Type>),
+    Option(Box<Type>),
+    Unit,
+    Unknown,
+}
 
+impl Value {
+    pub fn cast(self, t: &Type) -> Result<Value, EvalError> {
+        use EvalError::CastError;
+        use Value::*;
+        Ok(match (self, t) {
+            (String(s), Type::String) => s.into(),
+            (String(s), Type::Int) => {
+                s.parse::<i64>().map_err(|_| CastError)?.into()
+            }
+            (String(s), Type::Float) => {
+                s.parse::<f64>().map_err(|_| CastError)?.into()
+            }
+            (String(s), Type::Bool) => match s.as_str() {
+                "true" => true,
+                "false" => false,
+                _ => return Err(CastError),
+            }
+            .into(),
+            (Int(a), Type::String) => a.to_string().into(),
+            (Int(a), Type::Int) => a.into(),
+            (Int(a), Type::Float) => (a as f64).into(),
+            (Float(a), Type::String) => a.to_string().into(),
+            (Float(a), Type::Int) => {
+                if a.is_finite() {
+                    (a as i64).into()
+                }
+                else {
+                    return Err(CastError);
+                }
+            }
+            (Float(a), Type::Float) => a.into(),
+            (Bool(a), Type::String) => a.to_string().into(),
+            (Bool(a), Type::Bool) => a.into(),
+            (Array(v), Type::Array(t)) => v
+                .into_iter()
+                .map(|e| e.cast(t))
+                .collect::<Result<Vec<_>, _>>()?
+                .into(),
+            (Option(o), Type::Option(t)) => {
+                o.map(|v| v.cast(t)).transpose()?.into()
+            }
+            (Unit, Type::Unit) => ().into(),
+            _ => return Err(CastError),
+        })
+    }
+    pub fn _get_type(&self) -> Type {
+        use Value::*;
+        match self {
+            String(_) => Type::String,
+            Int(_) => Type::Int,
+            Float(_) => Type::Float,
+            Bool(_) => Type::Bool,
+            Array(v) => Type::Array(Box::new(
+                v.first().map(|v| v._get_type()).unwrap_or(Type::Unknown),
+            )),
+            Option(o) => Type::Option(Box::new(
+                o.as_ref().map(|v| v._get_type()).unwrap_or(Type::Unknown),
+            )),
+            Unit => Type::Unit,
+        }
+    }
+}
 impl From<String> for Value {
     fn from(value: String) -> Self {
         Value::String(value)

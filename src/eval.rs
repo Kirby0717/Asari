@@ -13,6 +13,7 @@ pub enum Error {
     OverFlow,
     UnwrapNone,
     UnknownShellVar,
+    CastError,
 }
 pub type Result<T> = ::core::result::Result<T, Error>;
 
@@ -198,6 +199,7 @@ fn eval_postfix(
             };
             index.and_then(|index| v.get(index).cloned()).into()
         }
+        (v, Cast(t)) => v.cast(&t.inner)?,
         _ => return Err(Error::TypeError),
     })
 }

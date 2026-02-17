@@ -5,6 +5,7 @@ pub mod literal;
 pub mod simple_expr;
 pub mod tools;
 
+use super::value::Type;
 use command::*;
 use error::*;
 use expr::*;
@@ -20,13 +21,11 @@ use winnow::{
     LocatingSlice,
     combinator::{
         alt, delimited, dispatch, empty, fail, not, opt, peek, preceded,
-        repeat, separated,
+        repeat, separated, trace,
     },
     prelude::*,
     token::{any, rest, take, take_till, take_until, take_while},
 };
-
-use crate::parse::tools::ParserExt;
 
 pub type Input<'i> = LocatingSlice<&'i str>;
 type Span = std::ops::Range<usize>;
@@ -155,10 +154,11 @@ impl Spanned<ExprInfix> {
 type ExprNode = Box<Spanned<Expr>>;
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub enum ExprPostfix {
-    Unwrap,          // !
-    IsSome,          // ?
-    Length,          // @
-    Index(ExprNode), //[expr]
+    Unwrap,              // !
+    IsSome,              // ?
+    Length,              // @
+    Index(ExprNode),     // [expr]
+    Cast(Spanned<Type>), // as type
 }
 impl ExprPostfix {
     fn power(&self) -> i32 {
@@ -167,7 +167,8 @@ impl ExprPostfix {
             Unwrap => 10,
             IsSome => 10,
             Length => 10,
-            Index(..) => 10,
+            Index(_) => 10,
+            Cast(_) => 9,
         }
     }
 }

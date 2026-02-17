@@ -13,6 +13,7 @@ pub enum ParseErrorKind {
     ParseOctError(std::num::ParseIntError),
     ParseDecError(std::num::ParseIntError),
     ParseHexError(std::num::ParseIntError),
+    ParseFloatError(std::num::ParseFloatError),
     NoIdent,
     InvalidIdent,
     InvalidUnicodeEscape(UnicodeEscapeError),
@@ -72,6 +73,7 @@ impl Display for ParseErrorKind {
                     _ => write!(f, "16進数の解析に失敗しました"),
                 }
             }
+            ParseFloatError(_) => write!(f, "小数の解析に失敗しました"),
             InvalidUnicodeEscape(e) => {
                 use UnicodeEscapeError::*;
                 match e {
