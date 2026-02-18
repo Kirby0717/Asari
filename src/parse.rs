@@ -1,89 +1,209 @@
-#![allow(unused)]
+pub mod command;
 pub mod error;
+pub mod expr;
+pub mod literal;
+pub mod simple_expr;
 pub mod tools;
 
+use super::value::Type;
+use command::*;
 use error::*;
-use std::fmt::Display;
+use expr::*;
+use literal::*;
+use simple_expr::*;
 use tools::*;
+
+pub use simple_expr::simple_expr;
+
+#[allow(unused_imports)]
+use winnow::combinator::todo as todo_parser;
 use winnow::{
     LocatingSlice,
     combinator::{
         alt, delimited, dispatch, empty, fail, not, opt, peek, preceded,
-        repeat, todo as todo_parser,
+        repeat, separated, trace,
     },
     prelude::*,
-    token::{any, rest, take_till, take_until, take_while},
+    token::{any, rest, take, take_till, take_until, take_while},
 };
 
-use crate::parse::tools::ParserExt;
-
-type Input<'i> = LocatingSlice<&'i str>;
+pub type Input<'i> = LocatingSlice<&'i str>;
 type Span = std::ops::Range<usize>;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+fn mix_span(a: &Span, b: &Span) -> Span {
+    a.start.min(b.start)..a.end.max(b.end)
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct Spanned<T> {
-    inner: T,
-    span: Span,
+    pub inner: T,
+    pub span: Span,
 }
 impl<T: PartialOrd> PartialOrd for Spanned<T> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.inner.partial_cmp(&other.inner)
     }
 }
-impl<T: Ord> Ord for Spanned<T> {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.inner.cmp(&other.inner)
-    }
-}
-impl<T: Display> Display for Spanned<T> {
+impl<T: std::fmt::Display> std::fmt::Display for Spanned<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.inner.fmt(f)
     }
 }
 
-fn spanned<T>(input: (T, Span)) -> Spanned<T> {
-    Spanned {
-        inner: input.0,
-        span: input.1,
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub struct ShellCommand {
     pub commands: Vec<(Command, Option<Pipe>)>,
     pub comment: Option<String>,
 }
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[allow(unused)]
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub enum Pipe {
     Split,
     Pipe,
     In,
     Out,
 }
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
+pub enum CommandPart {
+    Unquoted(Spanned<String>),
+    SimpleExpr(Spanned<Expr>),
+}
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub struct Command {
-    pub name: Spanned<Word>,
-    pub args: Vec<Spanned<Word>>,
+    pub name: CommandPart,
+    pub args: Vec<CommandPart>,
 }
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Word {
-    Literal(String),
-    // とりあえずStringで
-    PathLiteral(String),
-    SpecialVar(SpecialVar),
-    EnvVar(String),
-    ShellVar(String),
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
+pub enum ExprPrefix {
+    Not, // !
+    Neg, // -
 }
-impl Display for Word {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use Word::*;
+impl ExprPrefix {
+    fn power(&self) -> i32 {
+        use ExprPrefix::*;
         match self {
-            Literal(literal) => write!(f, "{literal}"),
-            _ => todo!(),
+            Not => 9,
+            Neg => 9,
         }
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+impl Spanned<ExprPrefix> {
+    fn apply(self, expr: Spanned<Expr>) -> Spanned<Expr> {
+        let expr = Box::new(expr);
+        Spanned {
+            span: mix_span(&self.span, &expr.span),
+            inner: Expr::Prefix(expr, self.inner),
+        }
+    }
+}
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
+pub enum ExprInfix {
+    UnwrapOr,     // ^
+    Add,          // +
+    Sub,          // -
+    Mul,          // *
+    Div,          // /
+    Rem,          // %
+    Equal,        // ==
+    NotEqual,     // !=
+    Less,         // <
+    LessEqual,    // <=
+    Greater,      // >
+    GreaterEqual, // >=
+    And,          // &&
+    Or,           // ||
+}
+impl ExprInfix {
+    #[rustfmt::skip]
+    fn power(&self) -> (i32, i32) {
+        use ExprInfix::*;
+        let right = |power| (power, power - 1);
+        let left = |power| (power, power + 1);
+        match self {
+            UnwrapOr     => right(1),
+            Add          => left(6),
+            Sub          => left(6),
+            Mul          => left(7),
+            Div          => left(7),
+            Rem          => left(7),
+            Equal        => left(4),
+            NotEqual     => left(4),
+            Less         => left(5),
+            LessEqual    => left(5),
+            Greater      => left(5),
+            GreaterEqual => left(5),
+            And          => left(3),
+            Or           => left(2),
+        }
+    }
+}
+impl Spanned<ExprInfix> {
+    fn apply(
+        self,
+        l_expr: Spanned<Expr>,
+        r_expr: Spanned<Expr>,
+    ) -> Spanned<Expr> {
+        let l_expr = Box::new(l_expr);
+        let r_expr = Box::new(r_expr);
+        Spanned {
+            span: mix_span(&l_expr.span, &r_expr.span),
+            inner: Expr::Infix(l_expr, r_expr, self.inner),
+        }
+    }
+}
+type ExprNode = Box<Spanned<Expr>>;
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
+pub enum ExprPostfix {
+    Unwrap,              // !
+    IsSome,              // ?
+    Length,              // @
+    Index(ExprNode),     // [expr]
+    Cast(Spanned<Type>), // as type
+}
+impl ExprPostfix {
+    fn power(&self) -> i32 {
+        use ExprPostfix::*;
+        match self {
+            Unwrap => 10,
+            IsSome => 10,
+            Length => 10,
+            Index(_) => 10,
+            Cast(_) => 9,
+        }
+    }
+}
+impl Spanned<ExprPostfix> {
+    fn apply(self, expr: Spanned<Expr>) -> Spanned<Expr> {
+        let expr = Box::new(expr);
+        Spanned {
+            span: mix_span(&expr.span, &self.span),
+            inner: Expr::Postfix(expr, self.inner),
+        }
+    }
+}
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
+pub enum Expr {
+    Primary(Spanned<Primary>),
+    Prefix(ExprNode, ExprPrefix),
+    Infix(ExprNode, ExprNode, ExprInfix),
+    Postfix(ExprNode, ExprPostfix),
+}
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
+pub enum Primary {
+    String(String),                     // "abc", 'abc', r"abc"
+    PathString(String),                 // p"abc"
+    SpecialVar(SpecialVar),             // $?, $$, $!, $@
+    EnvVar(String),                     // $abc
+    ShellVar(String),                   // @abc
+    Paren(Box<Spanned<Expr>>),          // (expr)
+    Array(Vec<Spanned<Expr>>),          // [e1, e2, ... , ek]
+    Bool(bool),                         // true, false
+    Int(i64),                           // 123
+    Float(f64),                         // 12.3
+    Option(Option<Box<Spanned<Expr>>>), // none, some(expr)
+    Unit,                               // ()
+}
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub enum SpecialVar {
     ExitStatus,    // $?
     Pid,           // $$
@@ -92,64 +212,22 @@ pub enum SpecialVar {
 }
 
 type ModalResult<O> = winnow::ModalResult<O, ParseError>;
+type SpannedResult<O> = ModalResult<Spanned<O>>;
+
+pub fn parse_shell_command(
+    input: &str,
+) -> Result<
+    ShellCommand,
+    winnow::error::ParseError<LocatingSlice<&str>, ParseError>,
+> {
+    shell_command.parse(Input::new(input))
+}
 
 fn space0<'a>(input: &mut Input<'a>) -> ModalResult<&'a str> {
     take_while(0.., char::is_whitespace).parse_next(input)
 }
 fn space1<'a>(input: &mut Input<'a>) -> ModalResult<&'a str> {
     take_while(1.., char::is_whitespace).parse_next(input)
-}
-fn unicode_number(input: &mut Input) -> ModalResult<char> {
-    take_until(0.., '}')
-        .map_err_with_span(|()| {
-            ParseErrorKind::InvalidUnicodeEscape(UnicodeEscapeError::NoEndBrace)
-        })
-        .try_map_with_span(|input| {
-            let code = u32::from_str_radix(input, 16)
-                .map_err(ParseErrorKind::ParseHexError)?;
-            char::from_u32(code).ok_or(ParseErrorKind::InvalidUnicodeEscape(
-                UnicodeEscapeError::InvalidUnicode,
-            ))
-        })
-        .parse_next(input)
-}
-fn unicode_escape_char(input: &mut Input) -> ModalResult<char> {
-    let _ = 'u'.parse_next(input)?;
-    let _ = '{'
-        .map_err_with_span(|()| {
-            ParseErrorKind::InvalidUnicodeEscape(
-                UnicodeEscapeError::NoBeginBrace,
-            )
-        })
-        .cut()
-        .parse_next(input)?;
-    let c = unicode_number.cut().parse_next(input)?;
-    let _ = '}'
-        .map_err_with_span(|()| {
-            ParseErrorKind::InvalidUnicodeEscape(UnicodeEscapeError::NoEndBrace)
-        })
-        .cut()
-        .parse_next(input)?;
-    Ok(c)
-}
-fn escape_char(input: &mut Input) -> ModalResult<char> {
-    preceded(
-        '\\',
-        dispatch!(peek(any);
-            'n' => any.value('\n'),
-            'r' => any.value('\r'),
-            't' => any.value('\t'),
-            'u' => unicode_escape_char,
-            '\\' => any.value('\\'),
-            '\"' => any.value('\"'),
-            '\'' => any.value('\''),
-            '0' => any.value('\0'),
-            c => any.try_map_with_span(|_| {
-                Err(ParseErrorKind::UnrecognizedEscape(c))
-            }).cut()
-        ),
-    )
-    .parse_next(input)
 }
 fn ident(input: &mut Input) -> ModalResult<String> {
     use unicode_ident::*;
@@ -176,103 +254,14 @@ fn ident(input: &mut Input) -> ModalResult<String> {
         .cut()
         .parse_next(input)
 }
-
-pub fn parse_shell_command(
-    input: &str,
-) -> Result<
-    ShellCommand,
-    winnow::error::ParseError<LocatingSlice<&str>, ParseError>,
-> {
-    shell_command.parse(Input::new(input))
-}
-fn shell_command(input: &mut Input) -> ModalResult<ShellCommand> {
-    let _ = space0.parse_next(input)?;
-    let commands = repeat(
-        0..=1,
-        preceded(peek(not('#')), (command, empty.value(None))),
+fn keyword<'a>(
+    s: &'static str,
+) -> impl Parser<Input<'a>, &'a str, winnow::error::ErrMode<ParseError>> {
+    (
+        s,
+        peek(not(any.verify(|c| unicode_ident::is_xid_continue(*c)))),
     )
-    .parse_next(input)?;
-    //commands: repeat(0.., preceded(peek(not('#')), (command, opt(pipe)))).parse_next(input)?,
-    let comment = opt(preceded(space0, comment)).parse_next(input)?;
-    let _ = space0.parse_next(input)?;
-    Ok(ShellCommand { commands, comment })
-}
-fn pipe(input: &mut Input) -> ModalResult<Pipe> {
-    todo!()
-}
-fn comment(input: &mut Input) -> ModalResult<String> {
-    preceded('#', rest).map(str::to_string).parse_next(input)
-}
-pub fn command(input: &mut Input) -> ModalResult<Command> {
-    Ok(Command {
-        name: word.parse_next(input)?,
-        args: repeat(0.., preceded((space1, peek(not('#'))), word))
-            .parse_next(input)?,
-    })
-}
-fn word(input: &mut Input) -> ModalResult<Spanned<Word>> {
-    dispatch!(peek(any);
-        '\'' => quoted_string.map(Word::Literal),
-        '"' => double_quoted_string.map(Word::Literal),
-        '$' => preceded('$', alt((
-            special_var.map(Word::SpecialVar),
-            ident.map(Word::EnvVar),
-        ))),
-        '%' => preceded('%', ident).map(Word::ShellVar),
-        _ => alt((
-            raw_string.map(Word::Literal),
-            path_string.map(Word::PathLiteral),
-            unquoted_string.map(Word::Literal),
-        ))
-    )
-    .with_span()
-    .map(spanned)
-    .parse_next(input)
-}
-fn quoted_string(input: &mut Input) -> ModalResult<String> {
-    const DELIMITER: char = '\'';
-    delimited(
-        DELIMITER,
-        repeat(0.., alt((escape_char, any.verify(|c| *c != DELIMITER)))),
-        DELIMITER
-            .map_err_with_span(|()| ParseErrorKind::NoEndQuotation)
-            .cut(),
-    )
-    .parse_next(input)
-}
-fn double_quoted_string(input: &mut Input) -> ModalResult<String> {
-    const DELIMITER: char = '\"';
-    delimited(
-        DELIMITER,
-        repeat(0.., alt((escape_char, any.verify(|c| *c != DELIMITER)))),
-        DELIMITER
-            .map_err_with_span(|()| ParseErrorKind::NoEndDoubleQuotation)
-            .cut(),
-    )
-    .parse_next(input)
-}
-fn raw_string(input: &mut Input) -> ModalResult<String> {
-    let _ = 'r'.parse_next(input)?;
-    let sharp = take_while(0.., '#').parse_next(input)?;
-    let _ = '"'.parse_next(input)?;
-    let delimiter = '"'.to_string() + sharp;
-    let raw = take_until(0.., delimiter.as_str()).parse_next(input)?;
-    let _ = delimiter.as_str().parse_next(input)?;
-    Ok(raw.to_string())
-}
-fn path_string(input: &mut Input) -> ModalResult<String> {
-    let _ = 'p'.parse_next(input)?;
-    let sharp = take_while(0.., '#').parse_next(input)?;
-    let _ = '"'.parse_next(input)?;
-    let delimiter = '"'.to_string() + sharp;
-    let raw = take_until(0.., delimiter.as_str()).parse_next(input)?;
-    let _ = delimiter.as_str().parse_next(input)?;
-    Ok(raw.to_string())
-}
-fn unquoted_string(input: &mut Input) -> ModalResult<String> {
-    take_till(1.., |c: char| c.is_whitespace() || "(){}|<>;&".contains(c))
-        .map(str::to_string)
-        .parse_next(input)
+        .map(|(s, _)| s)
 }
 fn special_var(input: &mut Input) -> ModalResult<SpecialVar> {
     dispatch!(any;

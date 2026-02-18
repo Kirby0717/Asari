@@ -24,6 +24,19 @@ pub trait ParserExt<I, O, E>: Parser<I, O, E> {
             e: PhantomData,
         }
     }
+    #[inline(always)]
+    fn spanned(self) -> impls::Spanned<Self, I, O, E>
+    where
+        Self: Sized,
+        I: Stream + Location,
+    {
+        impls::Spanned {
+            parser: self,
+            i: PhantomData,
+            o: PhantomData,
+            e: PhantomData,
+        }
+    }
 }
 impl<I, O, E, P: Parser<I, O, ErrMode<E>>> ParserModalExt<I, O, E> for P {}
 pub trait ParserModalExt<I, O, E>: Parser<I, O, ErrMode<E>> {

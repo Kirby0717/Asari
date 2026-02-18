@@ -1,6 +1,8 @@
 mod builtin;
+mod eval;
 mod exec;
 mod parse;
+mod value;
 
 fn main() -> anyhow::Result<()> {
     welcome();
@@ -15,7 +17,7 @@ fn main() -> anyhow::Result<()> {
         match stdin.read_line(&mut line) {
             Ok(_len) => {
                 let line = line.trim_end_matches(['\n', '\r']);
-                let parsed = parse::parse_shell_command(&line);
+                let parsed = parse::parse_shell_command(line);
                 let command = match parsed {
                     Ok(command) => command,
                     Err(e) => {
