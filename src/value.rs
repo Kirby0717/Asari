@@ -24,20 +24,20 @@ pub enum Type {
 
 impl Value {
     pub fn cast(self, t: &Type) -> Result<Value, EvalError> {
-        use EvalError::CastError;
+        use EvalError::FailCast;
         use Value::*;
         Ok(match (self, t) {
             (String(s), Type::String) => s.into(),
             (String(s), Type::Int) => {
-                s.parse::<i64>().map_err(|_| CastError)?.into()
+                s.parse::<i64>().map_err(|_| FailCast)?.into()
             }
             (String(s), Type::Float) => {
-                s.parse::<f64>().map_err(|_| CastError)?.into()
+                s.parse::<f64>().map_err(|_| FailCast)?.into()
             }
             (String(s), Type::Bool) => match s.as_str() {
                 "true" => true,
                 "false" => false,
-                _ => return Err(CastError),
+                _ => return Err(FailCast),
             }
             .into(),
             (Int(a), Type::String) => a.to_string().into(),
@@ -49,7 +49,7 @@ impl Value {
                     (a as i64).into()
                 }
                 else {
-                    return Err(CastError);
+                    return Err(FailCast);
                 }
             }
             (Float(a), Type::Float) => a.into(),
@@ -64,7 +64,7 @@ impl Value {
                 o.map(|v| v.cast(t)).transpose()?.into()
             }
             (Unit, Type::Unit) => ().into(),
-            _ => return Err(CastError),
+            _ => return Err(FailCast),
         })
     }
     pub fn _get_type(&self) -> Type {
@@ -205,6 +205,6 @@ impl From<()> for Value {
 }
 impl<T: Copy + Into<Value>> From<&T> for Value {
     fn from(value: &T) -> Self {
-        value.clone().into()
+        (*value).into()
     }
 }

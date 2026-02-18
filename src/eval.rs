@@ -1,4 +1,7 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    path::{Component, Path, PathBuf},
+};
 
 use super::{
     parse::{
@@ -9,11 +12,14 @@ use super::{
 
 #[derive(Clone, Debug)]
 pub enum Error {
-    TypeError,
+    InvalidType,
     OverFlow,
     UnwrapNone,
     UnknownShellVar,
-    CastError,
+    FailCast,
+    NoHomeDir,
+    InvalidUtf8Path,
+    InvalidGlobPattern,
 }
 pub type Result<T> = ::core::result::Result<T, Error>;
 
@@ -111,7 +117,7 @@ fn eval_prefix(
             [ Int(a) ] { Neg checked_neg }
         }
         @extra:
-        _ => return Err(Error::TypeError),
+        _ => return Err(Error::InvalidType),
     }
 }
 fn eval_infix(
@@ -155,7 +161,7 @@ fn eval_infix(
         @extra:
         (String(a), String(b), Add) => (a + &b).into(),
         (Option(a), b, UnwrapOr) => *a.unwrap_or(Box::new(b)),
-        _ => return Err(Error::TypeError),
+        _ => return Err(Error::InvalidType),
     }
 }
 fn eval_postfix(
@@ -182,7 +188,7 @@ fn eval_postfix(
             let index = eval_expr(index, env)?;
             let Int(index) = index
             else {
-                return Err(Error::TypeError);
+                return Err(Error::InvalidType);
             };
             let index = if index >= 0 {
                 // 正
@@ -200,14 +206,14 @@ fn eval_postfix(
             index.and_then(|index| v.get(index).cloned()).into()
         }
         (v, Cast(t)) => v.cast(&t.inner)?,
-        _ => return Err(Error::TypeError),
+        _ => return Err(Error::InvalidType),
     })
 }
 fn eval_primary(primary: &Spanned<Primary>, env: &Context) -> Result<Value> {
     use Primary::*;
     Ok(match &primary.inner {
         String(str) => str.clone().into(),
-        PathString(..) => todo!(),
+        PathString(str) => eval_path_string(str, env)?,
         SpecialVar(special_var) => eval_special_var(special_var, env)?,
         EnvVar(env_var) => std::env::var(env_var).ok().into(),
         ShellVar(shell_var) => env
@@ -240,4 +246,201 @@ fn eval_special_var(special_var: &SpecialVar, env: &Context) -> Result<Value> {
         BackgroundPid => env.last_pid.into(),
         ShellName => env.shell_name.clone().into(),
     })
+}
+fn eval_path_string(path_string: &str, _env: &Context) -> Result<Value> {
+    if path_string.is_empty() {
+        return Ok(Vec::<String>::new().into());
+    }
+    let path = tilde_expand(path_string)?;
+    let path = PathBuf::from(path);
+    let components = path.components().collect::<Vec<_>>();
+    if path.is_relative() {
+        let mut r = glob_expand(".", &components)?;
+        for path in &mut r {
+            if let Some(true_path) = path.strip_prefix(
+                (String::from(".") + std::path::MAIN_SEPARATOR_STR).as_str(),
+            ) {
+                *path = true_path.to_string();
+            }
+        }
+        Ok(r.into())
+    }
+    else {
+        Ok(glob_expand(".", &components)?.into())
+    }
+}
+
+fn tilde_expand(path: &str) -> Result<String> {
+    // チルダを確認
+    if let Some(path) = path.strip_prefix('~') {
+        // ユーザー名部分を切り出す
+        let (user_name, path) = path.split_at(
+            path.find(std::path::MAIN_SEPARATOR).unwrap_or(path.len()),
+        );
+
+        // ユーザー指定なし
+        if user_name.is_empty() {
+            // ホームディレクトリの取得
+            let Some(home_dir) = dirs::home_dir()
+            else {
+                return Err(Error::NoHomeDir);
+            };
+            let Ok(home_dir) = home_dir.into_os_string().into_string()
+            else {
+                return Err(Error::InvalidUtf8Path);
+            };
+            return Ok(home_dir + path);
+        }
+        // ユーザー指定あり
+        else {
+            // 未実装
+            // チルダを戻して返す
+            return Ok(String::from("~") + user_name + path);
+        }
+    }
+    Ok(path.to_string())
+}
+
+fn glob_expand<P: AsRef<Path>>(
+    base: P,
+    components: &[Component],
+) -> Result<Vec<String>> {
+    let base = base.as_ref();
+    // 次のコンポーネントを取得
+    let Some(component) = components.first()
+    else {
+        // 無いならマッチしたとして返却
+        let match_path =
+            base.to_str().ok_or(Error::InvalidUtf8Path)?.to_string();
+        return Ok(vec![match_path]);
+    };
+
+    // もしNormal以外ならBaseに追加して再帰
+    let Component::Normal(pattern) = component
+    else {
+        return glob_expand(base.join(component), &components[1..]);
+    };
+    let Some(pattern) = pattern.to_str()
+    else {
+        return Err(Error::InvalidUtf8Path);
+    };
+
+    // ファイル or フォルダの列挙
+    let Ok(dirs) = base.read_dir()
+    else {
+        return Ok(Vec::new());
+    };
+    let mut r = vec![];
+    let match_dot_file = pattern.starts_with('.');
+    let pattern = pattern.chars().collect::<Vec<_>>();
+    for entry in dirs {
+        let Ok(entry) = entry
+        else {
+            continue;
+        };
+        let file_name = entry.file_name();
+        let Some(target) = file_name.to_str()
+        else {
+            continue;
+        };
+        if target.starts_with('.') && !match_dot_file {
+            continue;
+        }
+        let target = target.chars().collect::<Vec<_>>();
+        if glob_match(&pattern, &target)? {
+            r.append(&mut glob_expand(entry.path(), &components[1..])?);
+        }
+    }
+    r.sort();
+    Ok(r)
+}
+fn glob_match(pattern: &[char], target: &[char]) -> Result<bool> {
+    Ok(if let Some(pattern_first) = pattern.first() {
+        match pattern_first {
+            '?' => {
+                !target.is_empty() && glob_match(&pattern[1..], &target[1..])?
+            }
+            '*' => {
+                // 次も * なら計算省略のため枝切り
+                if pattern.get(1).is_some_and(|c| *c == '*') {
+                    glob_match(&pattern[1..], target)?
+                }
+                else {
+                    for skip_len in 0..=target.len() {
+                        if glob_match(&pattern[1..], &target[skip_len..])? {
+                            return Ok(true);
+                        }
+                    }
+                    false
+                }
+            }
+            '[' => {
+                if let Some(pos) = pattern[1..].iter().position(|c| *c == ']') {
+                    let set = &pattern[1..pos];
+                    if let Some(tc) = target.first() {
+                        glob_match_class(set, *tc)?
+                            && glob_match(&pattern[pos + 1..], &target[1..])?
+                    }
+                    else {
+                        false
+                    }
+                }
+                else {
+                    // 閉じられていないならエラー
+                    return Err(Error::InvalidGlobPattern);
+                }
+            }
+            pc => {
+                target.first().is_some_and(|tc| tc == pc)
+                    && glob_match(&pattern[1..], &target[1..])?
+            }
+        }
+    }
+    else {
+        target.is_empty()
+    })
+}
+fn glob_match_class(set: &[char], target: char) -> Result<bool> {
+    // ! があるなら反転
+    let (exclusion_flag, set) = if set.first().is_some_and(|c| *c == '!') {
+        (true, &set[1..])
+    }
+    else {
+        (false, set)
+    };
+    // 範囲を分解
+    enum MatchSet {
+        Normal(char),
+        Range(char, char),
+    }
+    let mut iter = set.iter().peekable();
+    let mut set = vec![];
+    while let Some(&c) = iter.next() {
+        // 範囲の左側っぽそう
+        if iter.peek().is_some_and(|c| **c == '-') {
+            let _ = iter.next();
+            // その次があれば範囲
+            if let Some(&r) = iter.next() {
+                if c > r {
+                    return Err(Error::InvalidGlobPattern);
+                }
+                set.push(MatchSet::Range(c, r));
+            }
+            // 無ければ個別
+            else {
+                set.push(MatchSet::Normal('-'));
+                set.push(MatchSet::Normal(c));
+            }
+        }
+        else {
+            set.push(MatchSet::Normal(c));
+        }
+    }
+    // マッチ確認
+    let match_flag = set.iter().any(|pattern| match pattern {
+        MatchSet::Normal(c) => *c == target,
+        MatchSet::Range(l, r) => (*l..=*r).contains(&target),
+    });
+    // 除外を考慮して返す
+    Ok(exclusion_flag ^ match_flag)
 }
