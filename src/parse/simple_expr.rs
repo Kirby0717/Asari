@@ -1,5 +1,6 @@
 use super::*;
 
+// 変数と配列とクォート系と括弧のみのexpr
 pub fn simple_expr_primary(input: &mut Input) -> SpannedResult<Primary> {
     dispatch!(peek(any);
         '\'' => quoted_string.map(Primary::String),

@@ -23,6 +23,18 @@ pub enum Type {
 }
 
 impl Value {
+    pub fn to_args(&self) -> Vec<String> {
+        use Value::*;
+        match self {
+            String(str) => vec![str.clone()],
+            Int(a) => vec![a.to_string()],
+            Float(a) => vec![a.to_string()],
+            Bool(a) => vec![a.to_string()],
+            Array(v) => v.into_iter().flat_map(Value::to_args).collect(),
+            Option(o) => o.as_ref().map(|v| v.to_args()).unwrap_or_default(),
+            Unit => vec![],
+        }
+    }
     pub fn cast(self, t: &Type) -> Result<Value, EvalError> {
         use EvalError::FailCast;
         use Value::*;

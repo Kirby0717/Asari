@@ -5,7 +5,8 @@ use std::{
 
 use super::{
     parse::{
-        Expr, ExprInfix, ExprPostfix, ExprPrefix, Primary, Spanned, SpecialVar,
+        CommandPart, Expr, ExprInfix, ExprPostfix, ExprPrefix, Primary,
+        Spanned, SpecialVar,
     },
     value::*,
 };
@@ -41,6 +42,15 @@ impl Default for Context {
     }
 }
 
+pub fn eval_command_part(
+    command_part: &CommandPart,
+    env: &Context,
+) -> Result<Value> {
+    Ok(match command_part {
+        CommandPart::Unquoted(string) => tilde_expand(&string.inner)?.into(),
+        CommandPart::SimpleExpr(expr) => eval_expr(expr, env)?,
+    })
+}
 pub fn eval_expr(expr: &Spanned<Expr>, env: &Context) -> Result<Value> {
     use Expr::*;
     Ok(match &expr.inner {
@@ -50,6 +60,29 @@ pub fn eval_expr(expr: &Spanned<Expr>, env: &Context) -> Result<Value> {
         Postfix(expr, postfix) => eval_postfix(expr, postfix, env)?,
     })
 }
+/*
+
+match_op { 値;
+    マクロ1: {
+        基本 { 派生1, 派生2, ... }
+        基本 { 派生1, 派生2, ... }
+    }
+    マクロ2: {
+        基本 { 派生1, 派生2, ... }
+        基本 { 派生1, 派生2, ... }
+    }
+    ...
+    extre:
+    以降普通のmatchアーム
+}
+
+派生は 名前 要素 の2つ
+
+各マクロと基本と派生の組合せに対して
+マクロ(pat 基本 名前 要素) => マクロ(body 基本 名前 要素)
+というアームが追加される。
+
+*/
 macro_rules! match_op {
     {
         $value:expr;
@@ -92,12 +125,6 @@ macro_rules! checked_infix {
     (body [$type:ident($var1:ident, $var2:ident)] $infix: ident $op:tt) => {
         ($var1.$op($var2).ok_or(Error::OverFlow)?).into()
     };
-}
-macro_rules! _primitive_postfix {
-    (pat  [$type:ident($var:ident)] $postfix: ident $op:tt)
-        => {($type($var), $postfix)};
-    (body [$type:ident($var:ident)] $postfix: ident $op:tt)
-        => {($op $var).into()};
 }
 
 fn eval_prefix(
@@ -375,7 +402,7 @@ fn glob_match(pattern: &[char], target: &[char]) -> Result<bool> {
                 }
             }
             '[' => {
-                if let Some(pos) = pattern[1..].iter().position(|c| *c == ']') {
+                if let Some(pos) = pattern.iter().position(|c| *c == ']') {
                     let set = &pattern[1..pos];
                     if let Some(tc) = target.first() {
                         glob_match_class(set, *tc)?

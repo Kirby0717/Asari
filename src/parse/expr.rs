@@ -94,11 +94,11 @@ pub fn expr_primary(input: &mut Input) -> SpannedResult<Primary> {
             .map(|exprs| {
                 Primary::Array(exprs)
             }),
-        't' => "true".value(Primary::Bool(true)),
-        'f' => "false".value(Primary::Bool(false)),
+        't' => keyword("true").value(Primary::Bool(true)),
+        'f' => keyword("false").value(Primary::Bool(false)),
         '0'..='9' => number,
-        'n' => "none".value(Primary::Option(None)),
-        's' => delimited(("some", space0, '(', space0), expr, (space0, ')'))
+        'n' => keyword("none").value(Primary::Option(None)),
+        's' => delimited((keyword("some"), space0, '(', space0), expr, (space0, ')'))
             .map(|expr| Primary::Option(Some(Box::new(expr)))),
         _ => fail,
     )
@@ -182,6 +182,8 @@ fn expr_pratt(input: &mut Input, min_power: i32) -> SpannedResult<Expr> {
     }
     else {
         let primary = expr_primary.parse_next(input)?;
+        // (expr) の括弧を剥がず
+        // エラーなどは中身に対して行う
         match primary.inner {
             Primary::Paren(expr) => Spanned {
                 span: primary.span,

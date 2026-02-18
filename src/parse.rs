@@ -254,6 +254,15 @@ fn ident(input: &mut Input) -> ModalResult<String> {
         .cut()
         .parse_next(input)
 }
+fn keyword<'a>(
+    s: &'static str,
+) -> impl Parser<Input<'a>, &'a str, winnow::error::ErrMode<ParseError>> {
+    (
+        s,
+        peek(not(any.verify(|c| unicode_ident::is_xid_continue(*c)))),
+    )
+        .map(|(s, _)| s)
+}
 fn special_var(input: &mut Input) -> ModalResult<SpecialVar> {
     dispatch!(any;
         '?' => empty.value(SpecialVar::ExitStatus),

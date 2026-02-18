@@ -1,4 +1,5 @@
 #![allow(unused)]
+use crate::value::Value;
 use std::fmt::Display;
 
 #[derive(Clone, Debug)]
@@ -15,7 +16,7 @@ impl Display for Error {
 }
 type Result<T> = ::std::result::Result<T, Error>;
 
-pub fn run(name: &str, args: &[String]) -> Result<i32> {
+pub fn run(name: &str, args: &[Value]) -> Result<i32> {
     match name {
         "echo" => echo(args),
         "cd" => cd(args),
@@ -24,28 +25,23 @@ pub fn run(name: &str, args: &[String]) -> Result<i32> {
         _ => Err(Error::CommandNotFound),
     }
 }
-fn echo(args: &[String]) -> Result<i32> {
-    use std::io::{BufWriter, Write};
-
-    let stdout = std::io::stdout();
-    let mut writer = BufWriter::new(stdout.lock());
-
-    let mut iter = args.iter();
-    if let Some(first) = iter.next() {
-        let _ = write!(writer, "{first}");
-        for arg in iter {
-            let _ = write!(writer, " {arg}");
-        }
+fn echo(args: &[Value]) -> Result<i32> {
+    let args = args.iter().flat_map(Value::to_args).collect::<Vec<_>>();
+    if !args.is_empty() {
+        println!("{}", args.join(" "));
     }
-    let _ = writeln!(writer);
     Ok(0)
 }
-fn cd(args: &[String]) -> Result<i32> {
+fn cd(args: &[Value]) -> Result<i32> {
     if 1 < args.len() {
         return Err(Error::InvalidArgs);
     }
 
     if let Some(dir) = args.first() {
+        let Value::String(dir) = dir
+        else {
+            return Err(Error::InvalidArgs);
+        };
         let next_dir = std::env::current_dir()
             .map_err(|_| {
                 Error::Runtime(
@@ -72,25 +68,37 @@ fn cd(args: &[String]) -> Result<i32> {
     }
     Ok(0)
 }
-fn exit(args: &[String]) -> Result<i32> {
+// 終了優先
+fn exit(args: &[Value]) -> Result<i32> {
     if 1 < args.len() {
-        return Err(Error::InvalidArgs);
+        eprintln!("引数が2つ以上です");
     }
 
-    let code = args
-        .first()
-        .map(|code| code.parse::<i32>().map_err(|_| Error::InvalidArgs))
-        .transpose()?
-        .unwrap_or(0);
-    Err(Error::Exit(code))
+    let mut exit_code = 0;
+    if let Some(arg) = args.first() {
+        if let Value::Int(arg) = arg {
+            if let Ok(code) = i32::try_from(*arg) {
+                exit_code = code;
+            }
+            else {
+                eprintln!("引数が終了コードの範囲外です");
+                exit_code = -1;
+            }
+        }
+        else {
+            eprintln!("引数が整数ではありません");
+            exit_code = -1;
+        }
+    }
+    Err(Error::Exit(exit_code))
 }
-fn mkdir(args: &[String]) -> Result<i32> {
+fn mkdir(args: &[Value]) -> Result<i32> {
     if args.is_empty() {
         return Err(Error::InvalidArgs);
     }
 
     let mut exit_status = 0;
-    for dir in args {
+    for dir in args.iter().flat_map(Value::to_args) {
         match std::fs::create_dir_all(dir) {
             Ok(_) => {}
             Err(e) => {
