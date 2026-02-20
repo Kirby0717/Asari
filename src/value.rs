@@ -1,4 +1,4 @@
-use super::eval::Error as EvalError;
+use super::eval::EvalError;
 
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub enum Value {
@@ -19,6 +19,7 @@ pub enum Type {
     Array(Box<Type>),
     Option(Box<Type>),
     Unit,
+    #[allow(unused)]
     Unknown,
 }
 
@@ -30,7 +31,7 @@ impl Value {
             Int(a) => vec![a.to_string()],
             Float(a) => vec![a.to_string()],
             Bool(a) => vec![a.to_string()],
-            Array(v) => v.into_iter().flat_map(Value::to_args).collect(),
+            Array(v) => v.iter().flat_map(Value::to_args).collect(),
             Option(o) => o.as_ref().map(|v| v.to_args()).unwrap_or_default(),
             Unit => vec![],
         }

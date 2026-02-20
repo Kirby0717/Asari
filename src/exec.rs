@@ -1,27 +1,31 @@
 #![allow(unused)]
-use crate::eval::{Context, Error as EvalError, eval_command_part};
-use crate::parse::ShellCommand;
+use crate::eval::{Context, EvalError, ExecuteError, eval_command_part};
+use crate::parse::{ShellCommand, Spanned};
 use crate::value::Value;
 use std::{ffi::OsString, fmt::Display, path::PathBuf};
 
-#[derive(Clone, Debug)]
-pub enum Error {
-    Exit(i32),
-    EvalError(EvalError),
-    TypeError,
-    CommandError(String),
+type Result<T> = ::std::result::Result<T, ExecuteError>;
+
+pub enum Output {
+    Inherit,
+    Capture(Vec<u8>),
 }
-impl From<EvalError> for Error {
-    fn from(value: EvalError) -> Self {
-        Error::EvalError(value)
+impl std::io::Write for Output {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        use Output::*;
+        match self {
+            Inherit => std::io::stdout().write(buf),
+            Capture(vec) => vec.write(buf),
+        }
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        use Output::*;
+        match self {
+            Inherit => std::io::stdout().flush(),
+            Capture(_) => Ok(()),
+        }
     }
 }
-impl Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{self:?}")
-    }
-}
-type Result<T> = ::std::result::Result<T, Error>;
 
 #[derive(Clone, Debug, Default)]
 pub struct Shell {
@@ -31,62 +35,98 @@ impl Shell {
     pub fn new() -> Self {
         Self::default()
     }
-    pub fn execute(&mut self, cmd: &ShellCommand) -> Result<()> {
-        use crate::builtin::Error as BuiltinError;
-        for (command, _pipe) in &cmd.commands {
-            // 評価
-            let name = eval_command_part(&command.name, &self.context)?;
-            let args: Vec<_> = command
-                .args
-                .iter()
-                .map(|arg| {
-                    eval_command_part(arg, &self.context)
-                        .map_err(Error::EvalError)
-                })
-                .collect::<Result<Vec<_>>>()?;
-
-            // コマンド名の展開
-            // コマンド名は必ずStringである必要がある
-            let Value::String(name) = name
-            else {
-                return Err(Error::TypeError);
-            };
-
-            // ビルトインの実行を試す
-            match crate::builtin::run(&name, &args) {
-                // 実際のエラー処理はパイプとかを考える
-                Ok(_) => {
-                    continue;
-                }
-                Err(BuiltinError::Exit(code)) => return Err(Error::Exit(code)),
-                Err(BuiltinError::CommandNotFound) => {}
-                Err(e) => return Err(Error::CommandError(e.to_string())),
-            }
-
-            // 引数の展開
-            let args = args.iter().flat_map(Value::to_args).collect::<Vec<_>>();
-            // 外部コマンドの実行を試す
-            let Some(name) = find_executable(&name)
-            else {
-                return Err(Error::CommandError(
-                    "コマンドが見つかりませんでした".to_string(),
-                ));
-            };
-            self.context.last_status =
-                match std::process::Command::new(name).args(args).status() {
-                    // とりあえず基本的に来ないNoneは1へ変換
-                    #[cfg(unix)]
-                    Ok(status) => status.code().unwrap_or_else(|| {
-                        use std::os::unix::process::ExitStatusExt;
-                        status.signal().map(|sig| 128 + sig).unwrap_or(1)
-                    }),
-                    #[cfg(not(unix))]
-                    Ok(status) => status.code().unwrap_or(1),
-                    Err(e) => return Err(Error::CommandError(e.to_string())),
-                };
-        }
-        Ok(())
+    pub fn execute(
+        &mut self,
+        shell_command: &Spanned<ShellCommand>,
+    ) -> Result<()> {
+        execute_shell_command(
+            shell_command,
+            &mut Output::Inherit,
+            &mut self.context,
+        )
     }
+}
+
+pub fn execute_shell_command(
+    shell_command: &Spanned<ShellCommand>,
+    output: &mut Output,
+    env: &mut Context,
+) -> Result<()> {
+    use crate::builtin::Error as BuiltinError;
+    for (command, _pipe) in &shell_command.inner.commands {
+        // 評価
+        let name = eval_command_part(&command.inner.name, env)?;
+        let args: Vec<_> = command
+            .inner
+            .args
+            .iter()
+            .map(|arg| eval_command_part(arg, env))
+            .collect::<Result<Vec<_>>>()?;
+
+        // コマンド名の展開
+        // コマンド名は必ずStringである必要がある
+        let Value::String(name) = name
+        else {
+            return Err(ExecuteError::InvalidCommandType);
+        };
+
+        // 空文字列なら何もしない
+        if name.is_empty() {
+            continue;
+        }
+
+        // ビルトインの実行を試す
+        match crate::builtin::run(&name, &args) {
+            // 実際のエラー処理はパイプとかを考える
+            Ok(_) => {
+                continue;
+            }
+            Err(BuiltinError::Exit(code)) => {
+                return Err(ExecuteError::Exit(code));
+            }
+            Err(BuiltinError::CommandNotFound) => {}
+            Err(e) => return Err(ExecuteError::CommandError(e.to_string())),
+        }
+
+        // 引数の展開
+        let args = args.iter().flat_map(Value::to_args).collect::<Vec<_>>();
+        // 外部コマンドの実行を試す
+        let Some(name) = crate::exec::find_executable(&name)
+        else {
+            return Err(ExecuteError::CommandError(
+                "コマンドが見つかりませんでした".to_string(),
+            ));
+        };
+        let mut command = std::process::Command::new(name);
+        command.args(args);
+        // コマンドの出力を指定されたところへ
+        let status = match output {
+            Output::Inherit => command.status(),
+            Output::Capture(vec) => {
+                let output =
+                    command.stderr(std::process::Stdio::inherit()).output();
+                match output {
+                    Ok(output) => {
+                        vec.extend_from_slice(&output.stdout);
+                        Ok(output.status)
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+        };
+        env.last_status = match status {
+            // とりあえず基本的に来ないNoneは1へ変換
+            #[cfg(unix)]
+            Ok(status) => status.code().unwrap_or_else(|| {
+                use std::os::unix::process::ExitStatusExt;
+                status.signal().map(|sig| 128 + sig).unwrap_or(1)
+            }),
+            #[cfg(not(unix))]
+            Ok(status) => status.code().unwrap_or(1),
+            Err(e) => return Err(ExecuteError::CommandError(e.to_string())),
+        };
+    }
+    Ok(())
 }
 
 /// 実行可能ファイルのフルパスを探索

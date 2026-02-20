@@ -27,9 +27,13 @@ fn main() -> anyhow::Result<()> {
                     }
                 };
 
-                use exec::Error;
+                println!("parse_result:");
+                println!("{command:?}");
+
                 match shell.execute(&command) {
-                    Err(Error::Exit(code)) => std::process::exit(code),
+                    Err(eval::ExecuteError::Exit(code)) => {
+                        std::process::exit(code)
+                    }
                     Err(e) => eprintln!("コマンドの実行に失敗しました : {e}"),
                     _ => {}
                 }

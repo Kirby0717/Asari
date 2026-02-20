@@ -79,6 +79,8 @@ pub fn expr_primary(input: &mut Input) -> SpannedResult<Primary> {
         '\'' => quoted_string.map(Primary::String),
         '"' => double_quoted_string.map(Primary::String),
         '$' => preceded('$', alt((
+            delimited(('(', space0), shell_command, (space0, ')'))
+                .map(|shell_command| Primary::CommandSubst(Box::new(shell_command))),
             special_var.map(Primary::SpecialVar),
             ident.map(Primary::EnvVar),
         ))),
