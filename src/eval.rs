@@ -1,9 +1,11 @@
 use std::{
     collections::HashMap,
     path::{Component, Path, PathBuf},
+    string::String,
 };
 
 use super::{
+    exec::execute_shell_command,
     parse::{
         CommandPart, Expr, ExprInfix, ExprPostfix, ExprPrefix, Primary,
         Spanned, SpecialVar,
@@ -12,7 +14,7 @@ use super::{
 };
 
 #[derive(Clone, Debug)]
-pub enum Error {
+pub enum EvalError {
     InvalidType,
     OverFlow,
     UnwrapNone,
@@ -22,7 +24,26 @@ pub enum Error {
     InvalidUtf8Path,
     InvalidGlobPattern,
 }
-pub type Result<T> = ::core::result::Result<T, Error>;
+#[derive(Clone, Debug)]
+pub enum ExecuteError {
+    Exit(i32),
+    EvalError(EvalError),
+    CommandError(String),
+    InvalidCommandType,
+    CommandOutIsNotUtf8,
+}
+impl From<EvalError> for ExecuteError {
+    #[inline(always)]
+    fn from(value: EvalError) -> Self {
+        ExecuteError::EvalError(value)
+    }
+}
+impl std::fmt::Display for ExecuteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+type Result<T> = ::std::result::Result<T, ExecuteError>;
 
 #[derive(Clone, Debug)]
 pub struct Context {
@@ -41,17 +62,37 @@ impl Default for Context {
         }
     }
 }
+pub enum Output {
+    Inherit,
+    Capture(Vec<u8>),
+}
+impl std::io::Write for Output {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        use Output::*;
+        match self {
+            Inherit => std::io::stdout().write(buf),
+            Capture(vec) => vec.write(buf),
+        }
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        use Output::*;
+        match self {
+            Inherit => std::io::stdout().flush(),
+            Capture(_) => Ok(()),
+        }
+    }
+}
 
 pub fn eval_command_part(
-    command_part: &CommandPart,
-    env: &Context,
+    command_part: &Spanned<CommandPart>,
+    env: &mut Context,
 ) -> Result<Value> {
-    Ok(match command_part {
+    Ok(match &command_part.inner {
         CommandPart::Unquoted(string) => tilde_expand(&string.inner)?.into(),
         CommandPart::SimpleExpr(expr) => eval_expr(expr, env)?,
     })
 }
-pub fn eval_expr(expr: &Spanned<Expr>, env: &Context) -> Result<Value> {
+pub fn eval_expr(expr: &Spanned<Expr>, env: &mut Context) -> Result<Value> {
     use Expr::*;
     Ok(match &expr.inner {
         Primary(primary) => eval_primary(primary, env)?,
@@ -109,7 +150,7 @@ macro_rules! checked_prefix {
         ($type($var), $prefix)
     };
     (body [$type:ident($var:ident)] $prefix: ident $op:tt) => {
-        ($var.$op().ok_or(Error::OverFlow)?).into()
+        ($var.$op().ok_or(EvalError::OverFlow)?).into()
     };
 }
 macro_rules! primitive_infix {
@@ -123,14 +164,14 @@ macro_rules! checked_infix {
         ($type($var1), $type($var2), $infix)
     };
     (body [$type:ident($var1:ident, $var2:ident)] $infix: ident $op:tt) => {
-        ($var1.$op($var2).ok_or(Error::OverFlow)?).into()
+        ($var1.$op($var2).ok_or(EvalError::OverFlow)?).into()
     };
 }
 
 fn eval_prefix(
     expr: &Spanned<Expr>,
     prefix: &ExprPrefix,
-    env: &Context,
+    env: &mut Context,
 ) -> Result<Value> {
     let value = eval_expr(expr, env)?;
     use ExprPrefix::*;
@@ -144,14 +185,14 @@ fn eval_prefix(
             [ Int(a) ] { Neg checked_neg }
         }
         @extra:
-        _ => return Err(Error::InvalidType),
+        _ => return Err(EvalError::InvalidType.into()),
     }
 }
 fn eval_infix(
     expr1: &Spanned<Expr>,
     expr2: &Spanned<Expr>,
     infix: &ExprInfix,
-    env: &Context,
+    env: &mut Context,
 ) -> Result<Value> {
     let value1 = eval_expr(expr1, env)?;
     let value2 = eval_expr(expr2, env)?;
@@ -188,13 +229,13 @@ fn eval_infix(
         @extra:
         (String(a), String(b), Add) => (a + &b).into(),
         (Option(a), b, UnwrapOr) => *a.unwrap_or(Box::new(b)),
-        _ => return Err(Error::InvalidType),
+        _ => return Err(EvalError::InvalidType.into()),
     }
 }
 fn eval_postfix(
     expr: &Spanned<Expr>,
     postfix: &ExprPostfix,
-    env: &Context,
+    env: &mut Context,
 ) -> Result<Value> {
     let value = eval_expr(expr, env)?;
     use ExprPostfix::*;
@@ -205,7 +246,7 @@ fn eval_postfix(
                 *a
             }
             else {
-                return Err(Error::UnwrapNone);
+                return Err(EvalError::UnwrapNone.into());
             }
         }
         (Option(a), IsSome) => a.is_some().into(),
@@ -215,7 +256,7 @@ fn eval_postfix(
             let index = eval_expr(index, env)?;
             let Int(index) = index
             else {
-                return Err(Error::InvalidType);
+                return Err(EvalError::InvalidType.into());
             };
             let index = if index >= 0 {
                 // 正
@@ -233,10 +274,13 @@ fn eval_postfix(
             index.and_then(|index| v.get(index).cloned()).into()
         }
         (v, Cast(t)) => v.cast(&t.inner)?,
-        _ => return Err(Error::InvalidType),
+        _ => return Err(EvalError::InvalidType.into()),
     })
 }
-fn eval_primary(primary: &Spanned<Primary>, env: &Context) -> Result<Value> {
+fn eval_primary(
+    primary: &Spanned<Primary>,
+    env: &mut Context,
+) -> Result<Value> {
     use Primary::*;
     Ok(match &primary.inner {
         String(str) => str.clone().into(),
@@ -246,7 +290,7 @@ fn eval_primary(primary: &Spanned<Primary>, env: &Context) -> Result<Value> {
         ShellVar(shell_var) => env
             .shell_vars
             .get(shell_var)
-            .ok_or(Error::UnknownShellVar)?
+            .ok_or(EvalError::UnknownShellVar)?
             .clone(),
         Paren(expr) => eval_expr(expr, env)?,
         Array(array) => array
@@ -263,9 +307,27 @@ fn eval_primary(primary: &Spanned<Primary>, env: &Context) -> Result<Value> {
             .transpose()?
             .into(),
         Unit => ().into(),
+        CommandSubst(shell_command) => {
+            let mut child_env = env.clone();
+            let mut output = Output::Capture(Vec::new());
+            execute_shell_command(shell_command, &mut output, &mut child_env)?;
+            env.last_status = child_env.last_status;
+            let Output::Capture(output) = output
+            else {
+                unreachable!()
+            };
+            std::string::String::from_utf8(output)
+                .map_err(|_| ExecuteError::CommandOutIsNotUtf8)?
+                .trim_end_matches(['\r', '\n'])
+                .to_string()
+                .into()
+        }
     })
 }
-fn eval_special_var(special_var: &SpecialVar, env: &Context) -> Result<Value> {
+fn eval_special_var(
+    special_var: &SpecialVar,
+    env: &mut Context,
+) -> Result<Value> {
     use SpecialVar::*;
     Ok(match special_var {
         ExitStatus => env.last_status.into(),
@@ -274,7 +336,7 @@ fn eval_special_var(special_var: &SpecialVar, env: &Context) -> Result<Value> {
         ShellName => env.shell_name.clone().into(),
     })
 }
-fn eval_path_string(path_string: &str, _env: &Context) -> Result<Value> {
+fn eval_path_string(path_string: &str, _env: &mut Context) -> Result<Value> {
     if path_string.is_empty() {
         return Ok(Vec::<String>::new().into());
     }
@@ -310,11 +372,11 @@ fn tilde_expand(path: &str) -> Result<String> {
             // ホームディレクトリの取得
             let Some(home_dir) = dirs::home_dir()
             else {
-                return Err(Error::NoHomeDir);
+                return Err(EvalError::NoHomeDir.into());
             };
             let Ok(home_dir) = home_dir.into_os_string().into_string()
             else {
-                return Err(Error::InvalidUtf8Path);
+                return Err(EvalError::InvalidUtf8Path.into());
             };
             return Ok(home_dir + path);
         }
@@ -338,7 +400,7 @@ fn glob_expand<P: AsRef<Path>>(
     else {
         // 無いならマッチしたとして返却
         let match_path =
-            base.to_str().ok_or(Error::InvalidUtf8Path)?.to_string();
+            base.to_str().ok_or(EvalError::InvalidUtf8Path)?.to_string();
         return Ok(vec![match_path]);
     };
 
@@ -349,7 +411,7 @@ fn glob_expand<P: AsRef<Path>>(
     };
     let Some(pattern) = pattern.to_str()
     else {
-        return Err(Error::InvalidUtf8Path);
+        return Err(EvalError::InvalidUtf8Path.into());
     };
 
     // ファイル or フォルダの列挙
@@ -414,7 +476,7 @@ fn glob_match(pattern: &[char], target: &[char]) -> Result<bool> {
                 }
                 else {
                     // 閉じられていないならエラー
-                    return Err(Error::InvalidGlobPattern);
+                    return Err(EvalError::InvalidGlobPattern.into());
                 }
             }
             pc => {
@@ -449,7 +511,7 @@ fn glob_match_class(set: &[char], target: char) -> Result<bool> {
             // その次があれば範囲
             if let Some(&r) = iter.next() {
                 if c > r {
-                    return Err(Error::InvalidGlobPattern);
+                    return Err(EvalError::InvalidGlobPattern.into());
                 }
                 set.push(MatchSet::Range(c, r));
             }

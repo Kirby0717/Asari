@@ -5,15 +5,13 @@ pub mod literal;
 pub mod simple_expr;
 pub mod tools;
 
-use super::value::Type;
-use command::*;
+use crate::value::Type;
+use command::shell_command;
 use error::*;
-use expr::*;
+use expr::expr;
 use literal::*;
-use simple_expr::*;
+use simple_expr::simple_expr;
 use tools::*;
-
-pub use simple_expr::simple_expr;
 
 #[allow(unused_imports)]
 use winnow::combinator::todo as todo_parser;
@@ -52,8 +50,8 @@ impl<T: std::fmt::Display> std::fmt::Display for Spanned<T> {
 
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub struct ShellCommand {
-    pub commands: Vec<(Command, Option<Pipe>)>,
-    pub comment: Option<String>,
+    pub commands: Vec<(Spanned<Command>, Option<Spanned<Pipe>>)>,
+    pub comment: Option<Spanned<String>>,
 }
 #[allow(unused)]
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
@@ -70,8 +68,8 @@ pub enum CommandPart {
 }
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub struct Command {
-    pub name: CommandPart,
-    pub args: Vec<CommandPart>,
+    pub name: Spanned<CommandPart>,
+    pub args: Vec<Spanned<CommandPart>>,
 }
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub enum ExprPrefix {
@@ -190,18 +188,19 @@ pub enum Expr {
 }
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub enum Primary {
-    String(String),                     // "abc", 'abc', r"abc"
-    PathString(String),                 // p"abc"
-    SpecialVar(SpecialVar),             // $?, $$, $!, $@
-    EnvVar(String),                     // $abc
-    ShellVar(String),                   // @abc
-    Paren(Box<Spanned<Expr>>),          // (expr)
-    Array(Vec<Spanned<Expr>>),          // [e1, e2, ... , ek]
-    Bool(bool),                         // true, false
-    Int(i64),                           // 123
-    Float(f64),                         // 12.3
-    Option(Option<Box<Spanned<Expr>>>), // none, some(expr)
-    Unit,                               // ()
+    String(String),                           // "abc", 'abc', r"abc"
+    PathString(String),                       // p"abc"
+    SpecialVar(SpecialVar),                   // $?, $$, $!, $@
+    EnvVar(String),                           // $abc
+    ShellVar(String),                         // @abc
+    Paren(Box<Spanned<Expr>>),                // (expr)
+    CommandSubst(Box<Spanned<ShellCommand>>), // $(command args...)
+    Array(Vec<Spanned<Expr>>),                // [e1, e2, ... , ek]
+    Bool(bool),                               // true, false
+    Int(i64),                                 // 123
+    Float(f64),                               // 12.3
+    Option(Option<Box<Spanned<Expr>>>),       // none, some(expr)
+    Unit,                                     // ()
 }
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub enum SpecialVar {
@@ -217,10 +216,10 @@ type SpannedResult<O> = ModalResult<Spanned<O>>;
 pub fn parse_shell_command(
     input: &str,
 ) -> Result<
-    ShellCommand,
+    Spanned<ShellCommand>,
     winnow::error::ParseError<LocatingSlice<&str>, ParseError>,
 > {
-    shell_command.parse(Input::new(input))
+    delimited(space0, shell_command, space0).parse(Input::new(input))
 }
 
 fn space0<'a>(input: &mut Input<'a>) -> ModalResult<&'a str> {

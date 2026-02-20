@@ -1,11 +1,13 @@
 use super::*;
 
-// 変数と配列とクォート系と括弧のみのexpr
+// 変数と配列とクォート系と括弧のみのexpr_primary
 pub fn simple_expr_primary(input: &mut Input) -> SpannedResult<Primary> {
     dispatch!(peek(any);
         '\'' => quoted_string.map(Primary::String),
         '"' => double_quoted_string.map(Primary::String),
         '$' => preceded('$', alt((
+            delimited(('(', space0), shell_command, (space0, ')'))
+                .map(|shell_command| Primary::CommandSubst(Box::new(shell_command))),
             special_var.map(Primary::SpecialVar),
             ident.map(Primary::EnvVar),
         ))),
