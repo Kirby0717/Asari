@@ -1,12 +1,31 @@
 #![allow(unused)]
-use crate::eval::{
-    Context, EvalError, ExecuteError, Output, eval_command_part,
-};
+use crate::eval::{Context, EvalError, ExecuteError, eval_command_part};
 use crate::parse::{ShellCommand, Spanned};
 use crate::value::Value;
 use std::{ffi::OsString, fmt::Display, path::PathBuf};
 
 type Result<T> = ::std::result::Result<T, ExecuteError>;
+
+pub enum Output {
+    Inherit,
+    Capture(Vec<u8>),
+}
+impl std::io::Write for Output {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        use Output::*;
+        match self {
+            Inherit => std::io::stdout().write(buf),
+            Capture(vec) => vec.write(buf),
+        }
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        use Output::*;
+        match self {
+            Inherit => std::io::stdout().flush(),
+            Capture(_) => Ok(()),
+        }
+    }
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct Shell {
@@ -88,7 +107,7 @@ pub fn execute_shell_command(
                     command.stderr(std::process::Stdio::inherit()).output();
                 match output {
                     Ok(output) => {
-                        *vec = output.stdout;
+                        vec.extend_from_slice(&output.stdout);
                         Ok(output.status)
                     }
                     Err(e) => Err(e),

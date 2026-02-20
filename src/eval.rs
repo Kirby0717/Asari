@@ -5,7 +5,7 @@ use std::{
 };
 
 use super::{
-    exec::execute_shell_command,
+    exec::{Output, execute_shell_command},
     parse::{
         CommandPart, Expr, ExprInfix, ExprPostfix, ExprPrefix, Primary,
         Spanned, SpecialVar,
@@ -59,26 +59,6 @@ impl Default for Context {
             shell_vars: Default::default(),
             last_pid: None,
             last_status: 0,
-        }
-    }
-}
-pub enum Output {
-    Inherit,
-    Capture(Vec<u8>),
-}
-impl std::io::Write for Output {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        use Output::*;
-        match self {
-            Inherit => std::io::stdout().write(buf),
-            Capture(vec) => vec.write(buf),
-        }
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        use Output::*;
-        match self {
-            Inherit => std::io::stdout().flush(),
-            Capture(_) => Ok(()),
         }
     }
 }
@@ -310,8 +290,19 @@ fn eval_primary(
         CommandSubst(shell_command) => {
             let mut child_env = env.clone();
             let mut output = Output::Capture(Vec::new());
-            execute_shell_command(shell_command, &mut output, &mut child_env)?;
             env.last_status = child_env.last_status;
+            match execute_shell_command(
+                shell_command,
+                &mut output,
+                &mut child_env,
+            ) {
+                Ok(()) => {}
+                Err(ExecuteError::Exit(code)) => {
+                    env.last_status = code;
+                    return Ok("".to_string().into());
+                }
+                Err(e) => return Err(e),
+            }
             let Output::Capture(output) = output
             else {
                 unreachable!()

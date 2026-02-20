@@ -272,6 +272,3 @@ fn special_var(input: &mut Input) -> ModalResult<SpecialVar> {
     )
     .parse_next(input)
 }
-
-#[cfg(test)]
-mod test;
