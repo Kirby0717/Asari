@@ -22,7 +22,7 @@ use winnow::{
         repeat, separated, trace,
     },
     prelude::*,
-    token::{any, rest, take, take_till, take_until, take_while},
+    token::{any, one_of, rest, take, take_till, take_until, take_while},
 };
 
 pub type Input<'i> = LocatingSlice<&'i str>;
@@ -32,14 +32,27 @@ fn mix_span(a: &Span, b: &Span) -> Span {
     a.start.min(b.start)..a.end.max(b.end)
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct Spanned<T> {
     pub inner: T,
     pub span: Span,
 }
+impl<T> Spanned<T> {
+    pub fn map<U, F: FnOnce(T) -> U>(self, f: F) -> Spanned<U> {
+        Spanned {
+            inner: f(self.inner),
+            span: self.span,
+        }
+    }
+}
 impl<T: PartialOrd> PartialOrd for Spanned<T> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.inner.partial_cmp(&other.inner)
+    }
+}
+impl<T: std::fmt::Debug> std::fmt::Debug for Spanned<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.inner.fmt(f)
     }
 }
 impl<T: std::fmt::Display> std::fmt::Display for Spanned<T> {
@@ -50,26 +63,58 @@ impl<T: std::fmt::Display> std::fmt::Display for Spanned<T> {
 
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub struct ShellCommand {
-    pub commands: Vec<(Spanned<Command>, Option<Spanned<Pipe>>)>,
+    pub pipelines: Vec<Spanned<Pipeline>>,
     pub comment: Option<Spanned<String>>,
 }
-#[allow(unused)]
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
-pub enum Pipe {
-    Split,
-    Pipe,
-    In,
-    Out,
+pub struct Pipeline {
+    pub first: Spanned<Command>,
+    pub rest: Vec<(Spanned<Pipe>, Spanned<Command>)>,
 }
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
-pub enum CommandPart {
-    Unquoted(Spanned<String>),
-    SimpleExpr(Spanned<Expr>),
+pub enum Pipe {
+    Stdout,       // |   stdoutのみ
+    StdoutStderr, // |&  stdout + stderr
 }
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub struct Command {
     pub name: Spanned<CommandPart>,
     pub args: Vec<Spanned<CommandPart>>,
+    pub redirects: Vec<Spanned<Redirect>>,
+}
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
+pub enum Redirect {
+    Input(InputRedirect),
+    Output((OutputRedirect, Spanned<CommandPart>)),
+    Merge(MergeRedirect),
+}
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
+pub enum InputRedirect {
+    File(Spanned<CommandPart>),       // <    file
+    HereDoc(Spanned<String>),         // <<   EOF ... EOF
+    HereString(Spanned<CommandPart>), // <<< "string"
+}
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
+pub enum OutputRedirect {
+    Stdout(OutputMode), // >  >>
+    Stderr(OutputMode), // 2> 2>>
+    Both(OutputMode),   // &> &>>
+}
+
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
+pub enum OutputMode {
+    Truncate, // >  2>  &>
+    Append,   // >> 2>> &>>
+}
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
+pub enum MergeRedirect {
+    StderrToStdout, // 2>&1
+    StdoutToStderr, // 1>&2
+}
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
+pub enum CommandPart {
+    Unquoted(Spanned<String>),
+    SimpleExpr(Spanned<Expr>),
 }
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub enum ExprPrefix {

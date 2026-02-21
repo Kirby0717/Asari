@@ -1,8 +1,7 @@
-#![allow(unused)]
-use crate::eval::{Context, EvalError, ExecuteError, eval_command_part};
-use crate::parse::{ShellCommand, Spanned};
+use crate::eval::{Context, ExecuteError, eval_command_part};
+use crate::parse::{Pipe, Pipeline, ShellCommand, Spanned};
 use crate::value::Value;
-use std::{ffi::OsString, fmt::Display, path::PathBuf};
+use std::{ffi::OsString, path::PathBuf};
 
 type Result<T> = ::std::result::Result<T, ExecuteError>;
 
@@ -52,8 +51,97 @@ pub fn execute_shell_command(
     output: &mut Output,
     env: &mut Context,
 ) -> Result<()> {
+    for pipeline in &shell_command.inner.pipelines {
+        execute_pipeline(pipeline, output, env)?;
+    }
+    Ok(())
+}
+pub fn execute_pipeline(
+    pipeline: &Spanned<Pipeline>,
+    output: &mut Output,
+    env: &mut Context,
+) -> Result<()> {
     use crate::builtin::Error as BuiltinError;
-    for (command, _pipe) in &shell_command.inner.commands {
+    let command = &pipeline.inner.first;
+    // 評価
+    let name = eval_command_part(&command.inner.name, env)?;
+    let args: Vec<_> = command
+        .inner
+        .args
+        .iter()
+        .map(|arg| eval_command_part(arg, env))
+        .collect::<Result<Vec<_>>>()?;
+
+    // コマンド名の展開
+    // コマンド名は必ずStringである必要がある
+    let Value::String(name) = name
+    else {
+        return Err(ExecuteError::InvalidCommandType);
+    };
+
+    // 空文字列なら何もしない
+    if name.is_empty() {
+        //continue;
+        return Ok(());
+    }
+
+    // ビルトインの実行を試す
+    match crate::builtin::run(&name, &args) {
+        // 実際のエラー処理はパイプとかを考える
+        Ok(_) => {
+            //continue;
+            return Ok(());
+        }
+        Err(BuiltinError::Exit(code)) => {
+            return Err(ExecuteError::Exit(code));
+        }
+        Err(BuiltinError::CommandNotFound) => {}
+        Err(e) => {
+            return Err(ExecuteError::CommandError(e.to_string()));
+        }
+    }
+
+    // 引数の展開
+    let args = args.iter().flat_map(Value::to_args).collect::<Vec<_>>();
+    // 外部コマンドの実行を試す
+    let Some(name) = crate::exec::find_executable(&name)
+    else {
+        return Err(ExecuteError::CommandError(
+            "コマンドが見つかりませんでした".to_string(),
+        ));
+    };
+    let mut command = std::process::Command::new(name);
+    command.args(args);
+    // コマンドの出力を指定されたところへ
+    let status = match output {
+        Output::Inherit => command.status(),
+        Output::Capture(vec) => {
+            let output =
+                command.stderr(std::process::Stdio::inherit()).output();
+            match output {
+                Ok(output) => {
+                    vec.extend_from_slice(&output.stdout);
+                    Ok(output.status)
+                }
+                Err(e) => Err(e),
+            }
+        }
+    };
+    env.last_status = match status {
+        // とりあえず基本的に来ないNoneは1へ変換
+        #[cfg(unix)]
+        Ok(status) => status.code().unwrap_or_else(|| {
+            use std::os::unix::process::ExitStatusExt;
+            status.signal().map(|sig| 128 + sig).unwrap_or(1)
+        }),
+        #[cfg(not(unix))]
+        Ok(status) => status.code().unwrap_or(1),
+        Err(e) => {
+            return Err(ExecuteError::CommandError(e.to_string()));
+        }
+    };
+    /*
+    for (command, _pipe) in &pipeline.inner {
         // 評価
         let name = eval_command_part(&command.inner.name, env)?;
         let args: Vec<_> = command
@@ -85,7 +173,9 @@ pub fn execute_shell_command(
                 return Err(ExecuteError::Exit(code));
             }
             Err(BuiltinError::CommandNotFound) => {}
-            Err(e) => return Err(ExecuteError::CommandError(e.to_string())),
+            Err(e) => {
+                return Err(ExecuteError::CommandError(e.to_string()));
+            }
         }
 
         // 引数の展開
@@ -123,9 +213,12 @@ pub fn execute_shell_command(
             }),
             #[cfg(not(unix))]
             Ok(status) => status.code().unwrap_or(1),
-            Err(e) => return Err(ExecuteError::CommandError(e.to_string())),
+            Err(e) => {
+                return Err(ExecuteError::CommandError(e.to_string()));
+            }
         };
     }
+    */
     Ok(())
 }
 

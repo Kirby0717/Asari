@@ -13,6 +13,7 @@ use super::{
     value::*,
 };
 
+type Result<T> = ::std::result::Result<T, ExecuteError>;
 #[derive(Clone, Debug)]
 pub enum EvalError {
     InvalidType,
@@ -43,7 +44,6 @@ impl std::fmt::Display for ExecuteError {
         write!(f, "{self:?}")
     }
 }
-type Result<T> = ::std::result::Result<T, ExecuteError>;
 
 #[derive(Clone, Debug)]
 pub struct Context {

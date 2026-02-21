@@ -95,6 +95,7 @@ pub fn path_string(input: &mut Input) -> ModalResult<String> {
 }
 pub fn unquoted_string(input: &mut Input) -> ModalResult<String> {
     take_till(1.., |c: char| c.is_whitespace() || "(){}|<>;&".contains(c))
+        .verify(|string: &str| !string.starts_with('#'))
         .map(str::to_string)
         .parse_next(input)
 }
