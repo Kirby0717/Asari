@@ -33,6 +33,15 @@ impl From<EvalError> for Error {
         Error::EvalError(value)
     }
 }
+impl From<BuiltinError> for Error {
+    #[inline(always)]
+    fn from(value: BuiltinError) -> Self {
+        match value {
+            BuiltinError::Exit(code) => Error::Exit(code),
+            e => Error::BuiltinCommandError(e),
+        }
+    }
+}
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{self:?}")
@@ -88,6 +97,9 @@ pub fn execute_shell_command(
 ) -> Result<()> {
     for pipeline in &shell_command.inner.pipelines {
         if let Err(e) = execute_pipeline(pipeline, output, env) {
+            if matches!(e, Error::Exit(_)) {
+                return Err(e);
+            }
             eprintln!("{e:?}");
         }
     }
@@ -96,7 +108,7 @@ pub fn execute_shell_command(
 
 enum CommandHandle {
     External(std::process::Child),
-    Builtin(JoinHandle<Result<i32>>),
+    Builtin(JoinHandle<crate::builtin::Result<i32>>),
 }
 impl CommandHandle {
     fn wait(self) -> Result<i32> {
@@ -149,7 +161,6 @@ pub fn execute_pipeline(
                     let stdout = stdout.into_write_stdout();
                     let stderr = stderr.into_write_stderr();
                     crate::builtin::run(command, &args, stdin, stdout, stderr)
-                        .map_err(Error::BuiltinCommandError)
                 });
                 command_handles.push(CommandHandle::Builtin(builtin_handle));
             }

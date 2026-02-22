@@ -15,7 +15,7 @@ impl Display for Error {
         write!(f, "{self:?}")
     }
 }
-type Result<T> = ::std::result::Result<T, Error>;
+pub type Result<T> = ::std::result::Result<T, Error>;
 
 #[derive(Clone, Copy, Debug)]
 pub enum BuiltinCommand {
@@ -115,18 +115,29 @@ fn exit(
 
     let mut exit_code = 0;
     if let Some(arg) = args.first() {
-        if let Value::Int(arg) = arg {
-            if let Ok(code) = i32::try_from(*arg) {
-                exit_code = code;
+        match arg {
+            Value::Int(arg) => {
+                if let Ok(code) = i32::try_from(*arg) {
+                    exit_code = code;
+                }
+                else {
+                    eprintln!("数値が終了コードの範囲外です");
+                    exit_code = -1;
+                }
             }
-            else {
-                eprintln!("引数が終了コードの範囲外です");
+            Value::String(arg) => {
+                if let Ok(code) = arg.parse::<i32>() {
+                    exit_code = code;
+                }
+                else {
+                    eprintln!("文字列を終了コードに変換できませんでした");
+                    exit_code = -1;
+                }
+            }
+            _ => {
+                eprintln!("引数が整数または文字列ではありません");
                 exit_code = -1;
             }
-        }
-        else {
-            eprintln!("引数が整数ではありません");
-            exit_code = -1;
         }
     }
     Err(Error::Exit(exit_code))
