@@ -1,6 +1,6 @@
 use crate::parse::{
-    Command, MergeRedirect, OutputRedirect, Pipe, Pipeline, Redirect,
-    ShellCommand, Spanned,
+    Command, EnvAssign, MergeRedirect, OutputRedirect, Pipe, Pipeline,
+    Redirect, ShellCommand, Spanned, Statement,
 };
 
 #[derive(Clone, Debug)]
@@ -18,9 +18,25 @@ pub fn check_shell_command(
     shell_command: &Spanned<ShellCommand>,
     errors: &mut Vec<CheckError>,
 ) {
-    for pipeline in &shell_command.inner.pipelines {
-        check_pipline(pipeline, errors);
+    for statement in &shell_command.inner.statements {
+        check_statement(statement, errors);
     }
+}
+fn check_statement(
+    statement: &Spanned<Statement>,
+    errors: &mut Vec<CheckError>,
+) {
+    use Statement::*;
+    match &statement.inner {
+        Pipeline(pipeline) => check_pipline(pipeline, errors),
+        EnvAssign(env_assign) => check_env_assign(env_assign, errors),
+    }
+}
+fn check_env_assign(
+    _env_assign: &Spanned<EnvAssign>,
+    _errors: &mut Vec<CheckError>,
+) {
+    // 型チェックでもする
 }
 fn check_pipline(pipeline: &Spanned<Pipeline>, errors: &mut Vec<CheckError>) {
     let pipeline = &pipeline.inner;

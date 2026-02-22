@@ -2,17 +2,40 @@ use super::*;
 
 pub fn shell_command(input: &mut Input) -> SpannedResult<ShellCommand> {
     (
-        separated(0.., pipeline, (space0, ';', space0)),
+        separated(0.., statement, (space0, ';', space0)),
         opt((space0, ';')),
         opt(preceded(space0, comment)),
     )
-        .map(|(pipelines, _, comment)| ShellCommand { pipelines, comment })
+        .map(|(statements, _, comment)| ShellCommand {
+            statements,
+            comment,
+        })
         .spanned()
         .parse_next(input)
 }
 pub fn comment(input: &mut Input) -> SpannedResult<String> {
     preceded('#', rest)
         .map(str::to_string)
+        .spanned()
+        .parse_next(input)
+}
+pub fn statement(input: &mut Input) -> SpannedResult<Statement> {
+    alt((
+        env_assign.map(Statement::EnvAssign),
+        pipeline.map(Statement::Pipeline),
+    ))
+    .spanned()
+    .parse_next(input)
+}
+pub fn env_assign(input: &mut Input) -> SpannedResult<EnvAssign> {
+    (
+        preceded('$', ident).spanned(),
+        space1,
+        "=",
+        space1,
+        command_part,
+    )
+        .map(|(name, _, _, _, value)| EnvAssign { name, value })
         .spanned()
         .parse_next(input)
 }
@@ -37,16 +60,20 @@ pub fn command(input: &mut Input) -> SpannedResult<Command> {
         Redirect(Spanned<Redirect>),
     }
     (
+        repeat(0.., temp_env),
         command_part,
         repeat(
             0..,
-            alt((
-                preceded(space0, redirect).map(ArgOrRedirect::Redirect),
-                preceded(space1, command_part).map(ArgOrRedirect::Arg),
-            )),
+            preceded(
+                space1,
+                alt((
+                    redirect.map(ArgOrRedirect::Redirect),
+                    command_part.map(ArgOrRedirect::Arg),
+                )),
+            ),
         ),
     )
-        .map(|(name, arg_or_redirect): (_, Vec<_>)| {
+        .map(|(temp_env, name, arg_or_redirect): (Vec<_>, _, Vec<_>)| {
             let mut args = vec![];
             let mut redirects = vec![];
             for arg_or_redirect in arg_or_redirect {
@@ -58,11 +85,26 @@ pub fn command(input: &mut Input) -> SpannedResult<Command> {
                 }
             }
             Command {
+                temp_env,
                 name,
                 args,
                 redirects,
             }
         })
+        .spanned()
+        .parse_next(input)
+}
+pub fn temp_env(
+    input: &mut Input,
+) -> SpannedResult<(Spanned<String>, Spanned<CommandPart>)> {
+    (
+        preceded('$', ident).spanned(),
+        space1,
+        ":=",
+        space1,
+        command_part,
+    )
+        .map(|(var, _, _, _, val)| (var, val))
         .spanned()
         .parse_next(input)
 }

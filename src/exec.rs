@@ -2,7 +2,7 @@ use crate::builtin::{Error as BuiltinError, find_command};
 use crate::eval::{Context, Error as EvalError, eval_command_part};
 use crate::parse::{
     Command, CommandPart, InputRedirect, MergeRedirect, OutputMode,
-    OutputRedirect, Pipe, Pipeline, Redirect, ShellCommand, Spanned,
+    OutputRedirect, Pipe, Pipeline, Redirect, ShellCommand, Spanned, Statement,
 };
 use crate::value::Value;
 
@@ -26,6 +26,7 @@ pub enum Error {
     InvalidRedirectFileType,
     FailOpenRedirectFile(IoError),
     CommandOutIsNotUtf8,
+    EnvAssignNotString,
 }
 impl From<EvalError> for Error {
     #[inline(always)]
@@ -95,12 +96,37 @@ pub fn execute_shell_command(
     output: &mut Output,
     env: &mut Context,
 ) -> Result<()> {
-    for pipeline in &shell_command.inner.pipelines {
-        if let Err(e) = execute_pipeline(pipeline, output, env) {
-            if matches!(e, Error::Exit(_)) {
-                return Err(e);
+    for statement in &shell_command.inner.statements {
+        execute_statement(statement, output, env)?;
+    }
+    Ok(())
+}
+pub fn execute_statement(
+    statement: &Spanned<Statement>,
+    output: &mut Output,
+    env: &mut Context,
+) -> Result<()> {
+    use Statement::*;
+    match &statement.inner {
+        Pipeline(pipeline) => {
+            // Exitエラーは伝播させる
+            // それ以外はエラー表示で次に進む
+            if let Err(e) = execute_pipeline(pipeline, output, env) {
+                if matches!(e, Error::Exit(_)) {
+                    return Err(e);
+                }
+                eprintln!("{e:?}");
             }
-            eprintln!("{e:?}");
+        }
+        EnvAssign(env_assign) => {
+            let name = &env_assign.inner.name.inner;
+            let value = eval_command_part(&env_assign.inner.value, env)?;
+            let Value::String(value) = value
+            else {
+                return Err(Error::EnvAssignNotString);
+            };
+            // シングルスレッドでのみ環境変数を書き換えているので安全
+            unsafe { std::env::set_var(name, value) };
         }
     }
     Ok(())
@@ -148,6 +174,7 @@ pub fn execute_pipeline(
     for resolved_command in resolved_commands {
         let ResolvedCommand {
             command,
+            envs,
             args,
             stdin,
             stdout,
@@ -177,6 +204,7 @@ pub fn execute_pipeline(
                     args.iter().flat_map(Value::to_args).collect::<Vec<_>>();
 
                 let external_handle = std::process::Command::new(command)
+                    .envs(envs)
                     .args(args)
                     .stdin(stdin)
                     .stdout(stdout)
@@ -221,6 +249,7 @@ enum ExecutableCommand {
 #[derive(Debug)]
 struct ResolvedCommand {
     command: ExecutableCommand,
+    envs: Vec<(String, String)>,
     args: Vec<Value>,
     stdin: StdioInputConfig,
     stdout: StdioOutputConfig,
@@ -260,6 +289,7 @@ impl ResolvedCommand {
 
         Ok(Self {
             command,
+            envs: vec![],
             args,
             stdin: StdioInputConfig::default(),
             stdout: StdioOutputConfig::default(),

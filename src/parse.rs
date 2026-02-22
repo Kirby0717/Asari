@@ -63,8 +63,18 @@ impl<T: std::fmt::Display> std::fmt::Display for Spanned<T> {
 
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub struct ShellCommand {
-    pub pipelines: Vec<Spanned<Pipeline>>,
+    pub statements: Vec<Spanned<Statement>>,
     pub comment: Option<Spanned<String>>,
+}
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
+pub enum Statement {
+    Pipeline(Spanned<Pipeline>),
+    EnvAssign(Spanned<EnvAssign>),
+}
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
+pub struct EnvAssign {
+    pub name: Spanned<String>,
+    pub value: Spanned<CommandPart>,
 }
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub struct Pipeline {
@@ -78,6 +88,7 @@ pub enum Pipe {
 }
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub struct Command {
+    pub temp_env: Vec<Spanned<(Spanned<String>, Spanned<CommandPart>)>>,
     pub name: Spanned<CommandPart>,
     pub args: Vec<Spanned<CommandPart>>,
     pub redirects: Vec<Spanned<Redirect>>,
