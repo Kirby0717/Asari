@@ -1,14 +1,19 @@
-#![allow(unused)]
 use crate::value::Value;
 
 use std::fmt::Display;
-use std::io::{Read, Write};
+use std::io::{Error as IoError, Read, Write};
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub enum Error {
     Exit(i32),
     InvalidArgs,
+    Stdio(std::io::Error),
     Other(String),
+}
+impl From<IoError> for Error {
+    fn from(value: IoError) -> Self {
+        Error::Stdio(value)
+    }
 }
 impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -42,30 +47,36 @@ pub fn run(
     stderr: Box<dyn Write>,
 ) -> Result<i32> {
     use BuiltinCommand::*;
-    match command {
+    let result = match command {
         Echo => echo(args, stdin, stdout, stderr),
         Cd => cd(args, stdin, stdout, stderr),
         Exit => exit(args, stdin, stdout, stderr),
         Mkdir => mkdir(args, stdin, stdout, stderr),
+    };
+    if let Err(Error::Stdio(e)) = &result
+        && e.kind() == std::io::ErrorKind::BrokenPipe
+    {
+        return Ok(0);
     }
+    result
 }
 fn echo(
     args: &[Value],
-    stdin: Box<dyn Read>,
+    _stdin: Box<dyn Read>,
     mut stdout: Box<dyn Write>,
-    stderr: Box<dyn Write>,
+    _stderr: Box<dyn Write>,
 ) -> Result<i32> {
     let args = args.iter().flat_map(Value::to_args).collect::<Vec<_>>();
     if !args.is_empty() {
-        writeln!(stdout, "{}", args.join(" "));
+        writeln!(stdout, "{}", args.join(" ")).map_err(Error::Stdio)?;
     }
     Ok(0)
 }
 fn cd(
     args: &[Value],
-    stdin: Box<dyn Read>,
-    stdout: Box<dyn Write>,
-    stderr: Box<dyn Write>,
+    _stdin: Box<dyn Read>,
+    _stdout: Box<dyn Write>,
+    _stderr: Box<dyn Write>,
 ) -> Result<i32> {
     if 1 < args.len() {
         return Err(Error::InvalidArgs);
@@ -105,12 +116,12 @@ fn cd(
 // 終了優先
 fn exit(
     args: &[Value],
-    stdin: Box<dyn Read>,
-    stdout: Box<dyn Write>,
-    stderr: Box<dyn Write>,
+    _stdin: Box<dyn Read>,
+    _stdout: Box<dyn Write>,
+    mut stderr: Box<dyn Write>,
 ) -> Result<i32> {
     if 1 < args.len() {
-        eprintln!("引数が2つ以上です");
+        writeln!(stderr, "引数が2つ以上です")?;
     }
 
     let mut exit_code = 0;
@@ -121,7 +132,7 @@ fn exit(
                     exit_code = code;
                 }
                 else {
-                    eprintln!("数値が終了コードの範囲外です");
+                    writeln!(stderr, "数値が終了コードの範囲外です")?;
                     exit_code = -1;
                 }
             }
@@ -130,12 +141,15 @@ fn exit(
                     exit_code = code;
                 }
                 else {
-                    eprintln!("文字列を終了コードに変換できませんでした");
+                    writeln!(
+                        stderr,
+                        "文字列を終了コードに変換できませんでした"
+                    )?;
                     exit_code = -1;
                 }
             }
             _ => {
-                eprintln!("引数が整数または文字列ではありません");
+                writeln!(stderr, "引数が整数または文字列ではありません")?;
                 exit_code = -1;
             }
         }
@@ -144,9 +158,9 @@ fn exit(
 }
 fn mkdir(
     args: &[Value],
-    stdin: Box<dyn Read>,
-    stdout: Box<dyn Write>,
-    stderr: Box<dyn Write>,
+    _stdin: Box<dyn Read>,
+    _stdout: Box<dyn Write>,
+    mut stderr: Box<dyn Write>,
 ) -> Result<i32> {
     if args.is_empty() {
         return Err(Error::InvalidArgs);
@@ -158,7 +172,7 @@ fn mkdir(
             Ok(_) => {}
             Err(e) => {
                 exit_status = 1;
-                eprintln!("{e}");
+                writeln!(stderr, "{e}")?;
             }
         }
     }

@@ -271,7 +271,6 @@ fn eval_primary(
         CommandSubst(shell_command) => {
             let mut child_env = env.clone();
             let mut output = Output::Capture(Vec::new());
-            env.last_status = child_env.last_status;
             match execute_shell_command(
                 shell_command,
                 &mut output,
@@ -284,6 +283,7 @@ fn eval_primary(
                 }
                 Err(e) => return Err(e),
             }
+            env.last_status = child_env.last_status;
             let Output::Capture(output) = output
             else {
                 unreachable!()

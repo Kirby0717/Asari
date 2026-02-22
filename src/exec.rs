@@ -24,7 +24,7 @@ pub enum Error {
     InvalidCommandType,
     InvalidInputRedirectType,
     InvalidRedirectFileType,
-    FailOpenInputRedirectFile(IoError),
+    FailOpenRedirectFile(IoError),
     CommandOutIsNotUtf8,
 }
 impl From<EvalError> for Error {
@@ -397,18 +397,9 @@ fn resolve_pipeline(
 }
 fn apply_redirect(
     resolved_command: &mut ResolvedCommand,
-    mut redirects: Vec<Spanned<Redirect>>,
+    redirects: Vec<Spanned<Redirect>>,
     env: &mut Context,
 ) -> Result<()> {
-    // Mergeを後ろに追いやる
-    redirects.sort_by_key(|redirect| {
-        if matches!(redirect.inner, Redirect::Merge(_)) {
-            1
-        }
-        else {
-            0
-        }
-    });
     for redirect in redirects {
         match &redirect.inner {
             Redirect::Input(input_redirect) => {
@@ -452,7 +443,7 @@ fn apply_input_redirect(
             let file = std::fs::OpenOptions::new()
                 .read(true)
                 .open(path)
-                .map_err(Error::FailOpenInputRedirectFile)?;
+                .map_err(Error::FailOpenRedirectFile)?;
             resolved_command.stdin = StdioInputConfig::File(file);
         }
         // 文字列をそのまま渡す
@@ -497,9 +488,7 @@ fn apply_output_redirect(
         Append => file_opt.append(true),
         Truncate => file_opt.truncate(true),
     };
-    let file = file_opt
-        .open(path)
-        .map_err(Error::FailOpenInputRedirectFile)?;
+    let file = file_opt.open(path).map_err(Error::FailOpenRedirectFile)?;
     let file = StdioOutputConfig::File(file);
 
     // 書き込み元を設定
