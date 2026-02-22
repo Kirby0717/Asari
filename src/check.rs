@@ -50,14 +50,15 @@ fn check_fd_count(
 ) {
     // [in out err]
     let mut count = [0; 3];
+
     // リダイレクト
     for redirect in &command.inner.redirects {
         match &redirect.inner {
             Redirect::Input(_) => count[0] += 1,
-            Redirect::Output((output, _)) => match output {
-                OutputRedirect::Stdout(_) => count[1] += 1,
-                OutputRedirect::Stderr(_) => count[2] += 1,
-                OutputRedirect::Both(_) => {
+            Redirect::Output(((output, _), _)) => match output {
+                OutputRedirect::Stdout => count[1] += 1,
+                OutputRedirect::Stderr => count[2] += 1,
+                OutputRedirect::Both => {
                     count[1] += 1;
                     count[2] += 1;
                 }
@@ -68,6 +69,7 @@ fn check_fd_count(
             },
         }
     }
+
     // パイプ
     if pre_pipe.is_some() {
         count[0] += 1;
@@ -81,6 +83,7 @@ fn check_fd_count(
             }
         }
     }
+
     // エラーの追加
     if 2 <= count[0] {
         errors.push(CheckError::Redirect(RedirectError::DuplicateStdin));

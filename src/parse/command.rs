@@ -95,16 +95,18 @@ pub fn input_redirect(input: &mut Input) -> ModalResult<InputRedirect> {
     ))
     .parse_next(input)
 }
-pub fn output_redirect(input: &mut Input) -> ModalResult<OutputRedirect> {
+pub fn output_redirect(
+    input: &mut Input,
+) -> ModalResult<(OutputRedirect, OutputMode)> {
     use OutputMode::*;
     use OutputRedirect::*;
     alt((
-        "&>>".value(Both(Append)),
-        "&>".value(Both(Truncate)),
-        "2>>".value(Stderr(Append)),
-        "2>".value(Stderr(Truncate)),
-        ">>".value(Stdout(Append)),
-        ">".value(Stdout(Truncate)),
+        "&>>".value((Both, Append)),
+        "&>".value((Both, Truncate)),
+        "2>>".value((Stderr, Append)),
+        "2>".value((Stderr, Truncate)),
+        ">>".value((Stdout, Append)),
+        ">".value((Stdout, Truncate)),
     ))
     .parse_next(input)
 }

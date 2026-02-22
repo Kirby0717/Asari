@@ -22,7 +22,7 @@ use winnow::{
         repeat, separated, trace,
     },
     prelude::*,
-    token::{any, one_of, rest, take, take_till, take_until, take_while},
+    token::{any, rest, take, take_till, take_until, take_while},
 };
 
 pub type Input<'i> = LocatingSlice<&'i str>;
@@ -38,7 +38,7 @@ pub struct Spanned<T> {
     pub span: Span,
 }
 impl<T> Spanned<T> {
-    pub fn map<U, F: FnOnce(T) -> U>(self, f: F) -> Spanned<U> {
+    pub fn _map<U, F: FnOnce(T) -> U>(self, f: F) -> Spanned<U> {
         Spanned {
             inner: f(self.inner),
             span: self.span,
@@ -85,7 +85,7 @@ pub struct Command {
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub enum Redirect {
     Input(InputRedirect),
-    Output((OutputRedirect, Spanned<CommandPart>)),
+    Output(((OutputRedirect, OutputMode), Spanned<CommandPart>)),
     Merge(MergeRedirect),
 }
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
@@ -96,9 +96,9 @@ pub enum InputRedirect {
 }
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub enum OutputRedirect {
-    Stdout(OutputMode), // >  >>
-    Stderr(OutputMode), // 2> 2>>
-    Both(OutputMode),   // &> &>>
+    Stdout, // >  >>
+    Stderr, // 2> 2>>
+    Both,   // &> &>>
 }
 
 #[derive(Clone, Debug, PartialEq, PartialOrd)]

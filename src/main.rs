@@ -29,9 +29,6 @@ fn main() -> anyhow::Result<()> {
                     }
                 };
 
-                println!("parse_result:");
-                println!("{command:?}");
-
                 // 検証
                 let mut errors = vec![];
                 check::check_shell_command(&command, &mut errors);
@@ -41,13 +38,10 @@ fn main() -> anyhow::Result<()> {
                     }
                     continue;
                 }
-                continue;
 
                 // 実行
                 match shell.execute(&command) {
-                    Err(eval::ExecuteError::Exit(code)) => {
-                        std::process::exit(code)
-                    }
+                    Err(exec::Error::Exit(code)) => std::process::exit(code),
                     Err(e) => eprintln!("コマンドの実行に失敗しました : {e}"),
                     _ => {}
                 }
