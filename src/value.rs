@@ -1,4 +1,4 @@
-use super::eval::EvalError;
+use super::eval::Error;
 
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub enum Value {
@@ -36,8 +36,8 @@ impl Value {
             Unit => vec![],
         }
     }
-    pub fn cast(self, t: &Type) -> Result<Value, EvalError> {
-        use EvalError::FailCast;
+    pub fn cast(self, t: &Type) -> Result<Value, Error> {
+        use Error::FailCast;
         use Value::*;
         Ok(match (self, t) {
             (String(s), Type::String) => s.into(),
@@ -138,13 +138,13 @@ impl From<i64> for Value {
     }
 }
 impl TryFrom<u64> for Value {
-    type Error = EvalError;
+    type Error = Error;
     fn try_from(value: u64) -> Result<Self, Self::Error> {
         if let Ok(value) = i64::try_from(value) {
             Ok(Value::Int(value))
         }
         else {
-            Err(EvalError::OverFlow)
+            Err(Error::OverFlow)
         }
     }
 }
@@ -154,35 +154,35 @@ impl From<isize> for Value {
     }
 }
 impl TryFrom<usize> for Value {
-    type Error = EvalError;
+    type Error = Error;
     fn try_from(value: usize) -> Result<Self, Self::Error> {
         if let Ok(value) = i64::try_from(value) {
             Ok(Value::Int(value))
         }
         else {
-            Err(EvalError::OverFlow)
+            Err(Error::OverFlow)
         }
     }
 }
 impl TryFrom<i128> for Value {
-    type Error = EvalError;
+    type Error = Error;
     fn try_from(value: i128) -> Result<Self, Self::Error> {
         if let Ok(value) = i64::try_from(value) {
             Ok(Value::Int(value))
         }
         else {
-            Err(EvalError::OverFlow)
+            Err(Error::OverFlow)
         }
     }
 }
 impl TryFrom<u128> for Value {
-    type Error = EvalError;
+    type Error = Error;
     fn try_from(value: u128) -> Result<Self, Self::Error> {
         if let Ok(value) = i64::try_from(value) {
             Ok(Value::Int(value))
         }
         else {
-            Err(EvalError::OverFlow)
+            Err(Error::OverFlow)
         }
     }
 }

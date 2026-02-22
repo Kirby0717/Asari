@@ -1,10 +1,53 @@
-#![allow(unused)]
-use crate::eval::{Context, EvalError, ExecuteError, eval_command_part};
-use crate::parse::{ShellCommand, Spanned};
+use crate::builtin::{Error as BuiltinError, find_command};
+use crate::eval::{Context, Error as EvalError, eval_command_part};
+use crate::parse::{
+    Command, CommandPart, InputRedirect, MergeRedirect, OutputMode,
+    OutputRedirect, Pipe, Pipeline, Redirect, ShellCommand, Spanned,
+};
 use crate::value::Value;
-use std::{ffi::OsString, fmt::Display, path::PathBuf};
 
-type Result<T> = ::std::result::Result<T, ExecuteError>;
+use std::io::{Read, Write};
+use std::process::Stdio;
+use std::thread::JoinHandle;
+use std::{ffi::OsString, io::Error as IoError, path::PathBuf};
+
+#[derive(Debug)]
+pub enum Error {
+    Exit(i32),
+    EvalError(EvalError),
+    CommandError(IoError),
+    BuiltinCommandError(BuiltinError),
+    PipeError(IoError),
+    RedirectError(IoError),
+    EmptyCommand,
+    NotFoundCommand(String),
+    InvalidCommandType,
+    InvalidInputRedirectType,
+    InvalidRedirectFileType,
+    FailOpenRedirectFile(IoError),
+    CommandOutIsNotUtf8,
+}
+impl From<EvalError> for Error {
+    #[inline(always)]
+    fn from(value: EvalError) -> Self {
+        Error::EvalError(value)
+    }
+}
+impl From<BuiltinError> for Error {
+    #[inline(always)]
+    fn from(value: BuiltinError) -> Self {
+        match value {
+            BuiltinError::Exit(code) => Error::Exit(code),
+            e => Error::BuiltinCommandError(e),
+        }
+    }
+}
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+type Result<T> = ::std::result::Result<T, Error>;
 
 pub enum Output {
     Inherit,
@@ -52,10 +95,150 @@ pub fn execute_shell_command(
     output: &mut Output,
     env: &mut Context,
 ) -> Result<()> {
-    use crate::builtin::Error as BuiltinError;
-    for (command, _pipe) in &shell_command.inner.commands {
-        // 評価
+    for pipeline in &shell_command.inner.pipelines {
+        if let Err(e) = execute_pipeline(pipeline, output, env) {
+            if matches!(e, Error::Exit(_)) {
+                return Err(e);
+            }
+            eprintln!("{e:?}");
+        }
+    }
+    Ok(())
+}
+
+enum CommandHandle {
+    External(std::process::Child),
+    Builtin(JoinHandle<crate::builtin::Result<i32>>),
+}
+impl CommandHandle {
+    fn wait(self) -> Result<i32> {
+        match self {
+            CommandHandle::External(mut child) => {
+                let status = child.wait().map_err(Error::CommandError)?;
+                Ok(status.code().unwrap_or(1))
+            }
+            CommandHandle::Builtin(handle) => {
+                // ビルトインコマンドのパニックは伝播させる
+                Ok(handle.join().unwrap()?)
+            }
+        }
+    }
+}
+
+pub fn execute_pipeline(
+    pipeline: &Spanned<Pipeline>,
+    output: &mut Output,
+    env: &mut Context,
+) -> Result<()> {
+    // outputがCaptureならパイプを渡す
+    let (output_reader, output_writer) = match output {
+        Output::Inherit => (None, None),
+        Output::Capture(_) => {
+            let (reader, writer) = std::io::pipe().map_err(Error::PipeError)?;
+            (Some(reader), Some(writer))
+        }
+    };
+
+    // コマンドの整理
+    let resolved_commands = resolve_pipeline(pipeline, output_writer, env)?;
+
+    // コマンドを実行
+    let mut command_handles = vec![];
+    let mut string_handles = vec![];
+    for resolved_command in resolved_commands {
+        let ResolvedCommand {
+            command,
+            args,
+            stdin,
+            stdout,
+            stderr,
+        } = resolved_command;
+
+        match command {
+            ExecutableCommand::Builtin(command) => {
+                let builtin_handle = std::thread::spawn(move || {
+                    let stdin = stdin.into_read();
+                    let stdout = stdout.into_write_stdout();
+                    let stderr = stderr.into_write_stderr();
+                    crate::builtin::run(command, &args, stdin, stdout, stderr)
+                });
+                command_handles.push(CommandHandle::Builtin(builtin_handle));
+            }
+            ExecutableCommand::External(command) => {
+                let (stdin, handle) = stdin.into_stdio()?;
+                let stdout = stdout.into_stdio();
+                let stderr = stderr.into_stdio();
+                if let Some(handle) = handle {
+                    string_handles.push(handle);
+                }
+
+                // 引数の展開
+                let args =
+                    args.iter().flat_map(Value::to_args).collect::<Vec<_>>();
+
+                let external_handle = std::process::Command::new(command)
+                    .args(args)
+                    .stdin(stdin)
+                    .stdout(stdout)
+                    .stderr(stderr)
+                    .spawn()
+                    .map_err(Error::CommandError)?;
+                command_handles.push(CommandHandle::External(external_handle));
+            }
+        }
+    }
+
+    // アウトプットの受け取りスレッド
+    let output_handle = output_reader.map(|mut reader| {
+        std::thread::spawn(move || {
+            let mut v = vec![];
+            let _ = reader.read_to_end(&mut v);
+            v
+        })
+    });
+
+    // 全実行を待つ
+    for handle in command_handles {
+        env.last_status = handle.wait()?;
+    }
+
+    // アウトプットを追記
+    if let Some(output_handle) = output_handle
+        && let Output::Capture(v) = output
+    {
+        let output = output_handle.join().unwrap();
+        v.extend_from_slice(&output);
+    }
+
+    Ok(())
+}
+
+#[derive(Debug)]
+enum ExecutableCommand {
+    Builtin(crate::builtin::BuiltinCommand),
+    External(PathBuf),
+}
+#[derive(Debug)]
+struct ResolvedCommand {
+    command: ExecutableCommand,
+    args: Vec<Value>,
+    stdin: StdioInputConfig,
+    stdout: StdioOutputConfig,
+    stderr: StdioOutputConfig,
+}
+impl ResolvedCommand {
+    fn new(command: &Spanned<Command>, env: &mut Context) -> Result<Self> {
+        // コマンド名の評価
         let name = eval_command_part(&command.inner.name, env)?;
+        let Value::String(name) = name
+        else {
+            return Err(Error::InvalidCommandType);
+        };
+        if name.is_empty() {
+            return Err(Error::EmptyCommand);
+        }
+
+        // 引数の評価
         let args: Vec<_> = command
             .inner
             .args
@@ -63,68 +246,278 @@ pub fn execute_shell_command(
             .map(|arg| eval_command_part(arg, env))
             .collect::<Result<Vec<_>>>()?;
 
-        // コマンド名の展開
-        // コマンド名は必ずStringである必要がある
-        let Value::String(name) = name
-        else {
-            return Err(ExecuteError::InvalidCommandType);
-        };
-
-        // 空文字列なら何もしない
-        if name.is_empty() {
-            continue;
+        // ビルトインコマンドの確認
+        let command = if let Some(command) = find_command(&name) {
+            ExecutableCommand::Builtin(command)
         }
-
-        // ビルトインの実行を試す
-        match crate::builtin::run(&name, &args) {
-            // 実際のエラー処理はパイプとかを考える
-            Ok(_) => {
-                continue;
-            }
-            Err(BuiltinError::Exit(code)) => {
-                return Err(ExecuteError::Exit(code));
-            }
-            Err(BuiltinError::CommandNotFound) => {}
-            Err(e) => return Err(ExecuteError::CommandError(e.to_string())),
-        }
-
-        // 引数の展開
-        let args = args.iter().flat_map(Value::to_args).collect::<Vec<_>>();
-        // 外部コマンドの実行を試す
-        let Some(name) = crate::exec::find_executable(&name)
+        // 外部コマンドの確認
         else {
-            return Err(ExecuteError::CommandError(
-                "コマンドが見つかりませんでした".to_string(),
-            ));
+            ExecutableCommand::External(
+                find_executable(&name)
+                    .ok_or(Error::NotFoundCommand(name.to_string()))?,
+            )
         };
-        let mut command = std::process::Command::new(name);
-        command.args(args);
-        // コマンドの出力を指定されたところへ
-        let status = match output {
-            Output::Inherit => command.status(),
-            Output::Capture(vec) => {
-                let output =
-                    command.stderr(std::process::Stdio::inherit()).output();
-                match output {
-                    Ok(output) => {
-                        vec.extend_from_slice(&output.stdout);
-                        Ok(output.status)
-                    }
-                    Err(e) => Err(e),
-                }
+
+        Ok(Self {
+            command,
+            args,
+            stdin: StdioInputConfig::default(),
+            stdout: StdioOutputConfig::default(),
+            stderr: StdioOutputConfig::default(),
+        })
+    }
+}
+#[derive(Default, Debug)]
+enum StdioInputConfig {
+    #[default]
+    Inherit,
+    String(String),
+    File(std::fs::File),
+    PipeReader(std::io::PipeReader),
+}
+impl StdioInputConfig {
+    fn into_read(self) -> Box<dyn std::io::Read> {
+        use StdioInputConfig::*;
+        match self {
+            Inherit => Box::new(std::io::stdin()),
+            String(s) => Box::new(std::io::Cursor::new(s)),
+            File(file) => Box::new(file),
+            PipeReader(pipe) => Box::new(pipe),
+        }
+    }
+    fn into_stdio(
+        self,
+    ) -> Result<(Stdio, Option<JoinHandle<std::io::Result<()>>>)> {
+        use StdioInputConfig::*;
+        Ok(match self {
+            Inherit => (Stdio::inherit(), None),
+            String(s) => {
+                let (reader, mut writer) =
+                    std::io::pipe().map_err(Error::PipeError)?;
+                let handle =
+                    std::thread::spawn(move || writer.write_all(s.as_bytes()));
+                (reader.into(), Some(handle))
             }
-        };
-        env.last_status = match status {
-            // とりあえず基本的に来ないNoneは1へ変換
-            #[cfg(unix)]
-            Ok(status) => status.code().unwrap_or_else(|| {
-                use std::os::unix::process::ExitStatusExt;
-                status.signal().map(|sig| 128 + sig).unwrap_or(1)
-            }),
-            #[cfg(not(unix))]
-            Ok(status) => status.code().unwrap_or(1),
-            Err(e) => return Err(ExecuteError::CommandError(e.to_string())),
-        };
+            File(file) => (file.into(), None),
+            PipeReader(pipe) => (pipe.into(), None),
+        })
+    }
+}
+#[derive(Default, Debug)]
+enum StdioOutputConfig {
+    #[default]
+    Inherit,
+    File(std::fs::File),
+    PipeWriter(std::io::PipeWriter),
+}
+impl StdioOutputConfig {
+    fn try_clone(&self) -> Result<StdioOutputConfig> {
+        use StdioOutputConfig::*;
+        Ok(match self {
+            Inherit => Inherit,
+            File(file) => File(file.try_clone().map_err(Error::RedirectError)?),
+            PipeWriter(writer) => {
+                PipeWriter(writer.try_clone().map_err(Error::PipeError)?)
+            }
+        })
+    }
+    fn into_write_stdout(self) -> Box<dyn std::io::Write> {
+        use StdioOutputConfig::*;
+        match self {
+            Inherit => Box::new(std::io::stdout()),
+            File(file) => Box::new(file),
+            PipeWriter(pipe) => Box::new(pipe),
+        }
+    }
+    fn into_write_stderr(self) -> Box<dyn std::io::Write> {
+        use StdioOutputConfig::*;
+        match self {
+            Inherit => Box::new(std::io::stderr()),
+            File(file) => Box::new(file),
+            PipeWriter(pipe) => Box::new(pipe),
+        }
+    }
+    fn into_stdio(self) -> Stdio {
+        use StdioOutputConfig::*;
+        match self {
+            Inherit => Stdio::inherit(),
+            File(file) => file.into(),
+            PipeWriter(pipe) => pipe.into(),
+        }
+    }
+}
+
+fn resolve_pipeline(
+    pipeline: &Spanned<Pipeline>,
+    capture: Option<std::io::PipeWriter>,
+    env: &mut Context,
+) -> Result<Vec<ResolvedCommand>> {
+    let Pipeline { first, rest } = &pipeline.inner;
+    let mut commands_with_redirects = vec![];
+
+    // 初期設定
+    commands_with_redirects.push((
+        ResolvedCommand::new(first, env)?,
+        first.inner.redirects.clone(),
+    ));
+    for (pipe, command) in rest {
+        // パイプに対する左右のコマンドを取得
+        let (left, _) = commands_with_redirects.last_mut().unwrap();
+        let mut right = ResolvedCommand::new(command, env)?;
+
+        // パイプの作成
+        let (reader, writer) = std::io::pipe().map_err(Error::PipeError)?;
+        let reader = StdioInputConfig::PipeReader(reader);
+        let writer = StdioOutputConfig::PipeWriter(writer);
+
+        // 種類ごとに設定
+        if matches!(pipe.inner, Pipe::StdoutStderr) {
+            left.stderr = writer.try_clone()?;
+        }
+        left.stdout = writer;
+        right.stdin = reader;
+
+        commands_with_redirects.push((right, command.inner.redirects.clone()));
+    }
+
+    // キャプチャー設定
+    if let Some(capture) = capture {
+        commands_with_redirects.last_mut().unwrap().0.stdout =
+            StdioOutputConfig::PipeWriter(capture);
+    }
+
+    // リダイレクトの反映
+    let mut commands = vec![];
+    for (mut command, redirects) in commands_with_redirects {
+        apply_redirect(&mut command, redirects, env)?;
+        commands.push(command);
+    }
+
+    Ok(commands)
+}
+fn apply_redirect(
+    resolved_command: &mut ResolvedCommand,
+    redirects: Vec<Spanned<Redirect>>,
+    env: &mut Context,
+) -> Result<()> {
+    for redirect in redirects {
+        match &redirect.inner {
+            Redirect::Input(input_redirect) => {
+                apply_input_redirect(resolved_command, input_redirect, env)?;
+            }
+            Redirect::Output((
+                (output_redirect, output_mode),
+                file_expression,
+            )) => {
+                apply_output_redirect(
+                    resolved_command,
+                    output_redirect,
+                    output_mode,
+                    file_expression,
+                    env,
+                )?;
+            }
+            Redirect::Merge(merge_redirect) => {
+                apply_merge_redirect(resolved_command, merge_redirect)?;
+            }
+        }
+    }
+    Ok(())
+}
+fn apply_input_redirect(
+    resolved_command: &mut ResolvedCommand,
+    input_redirect: &InputRedirect,
+    env: &mut Context,
+) -> Result<()> {
+    use InputRedirect::*;
+    match input_redirect {
+        // ファイルを読み込み用に開いて設定
+        File(file) => {
+            // ファイル名の評価
+            let value = eval_command_part(file, env)?;
+            let Value::String(path) = value
+            else {
+                return Err(Error::InvalidRedirectFileType);
+            };
+
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .open(path)
+                .map_err(Error::FailOpenRedirectFile)?;
+            resolved_command.stdin = StdioInputConfig::File(file);
+        }
+        // 文字列をそのまま渡す
+        HereDoc(s) => {
+            resolved_command.stdin = StdioInputConfig::String(s.inner.clone());
+        }
+        // 文字列を評価してそのまま渡す
+        HereString(value) => {
+            let value = eval_command_part(value, env)?;
+            let Value::String(s) = value
+            else {
+                return Err(Error::InvalidInputRedirectType);
+            };
+            resolved_command.stdin = StdioInputConfig::String(s);
+        }
+    }
+
+    Ok(())
+}
+fn apply_output_redirect(
+    resolved_command: &mut ResolvedCommand,
+    output_redirect: &OutputRedirect,
+    output_mode: &OutputMode,
+    file_expression: &Spanned<CommandPart>,
+    env: &mut Context,
+) -> Result<()> {
+    use OutputMode::*;
+    use OutputRedirect::*;
+
+    // ファイル名の評価
+    let value = eval_command_part(file_expression, env)?;
+    let Value::String(path) = value
+    else {
+        return Err(Error::InvalidRedirectFileType);
+    };
+
+    // ファイルをモードに応じて開く
+    let mut file_opt = std::fs::OpenOptions::new();
+    file_opt.create(true);
+    file_opt.write(true);
+    match output_mode {
+        Append => file_opt.append(true),
+        Truncate => file_opt.truncate(true),
+    };
+    let file = file_opt.open(path).map_err(Error::FailOpenRedirectFile)?;
+    let file = StdioOutputConfig::File(file);
+
+    // 書き込み元を設定
+    match output_redirect {
+        Stdout => {
+            resolved_command.stdout = file;
+        }
+        Stderr => {
+            resolved_command.stderr = file;
+        }
+        Both => {
+            resolved_command.stdout = file.try_clone()?;
+            resolved_command.stderr = file;
+        }
+    }
+    Ok(())
+}
+fn apply_merge_redirect(
+    resolved_command: &mut ResolvedCommand,
+    merge_redirect: &MergeRedirect,
+) -> Result<()> {
+    use MergeRedirect::*;
+    match merge_redirect {
+        StderrToStdout => {
+            resolved_command.stderr = resolved_command.stdout.try_clone()?
+        }
+        StdoutToStderr => {
+            resolved_command.stdout = resolved_command.stderr.try_clone()?
+        }
     }
     Ok(())
 }
@@ -139,6 +532,7 @@ fn find_executable(name: &str) -> Option<PathBuf> {
         .extension()
         .map(|ext| vec![ext.to_os_string()])
         .unwrap_or_else(get_pathext);
+
     // 探索するパスを取得
     let search_dirs = name
         .parent()

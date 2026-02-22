@@ -89,7 +89,7 @@ impl Display for ParseErrorKind {
             NoEndDoubleQuotation => {
                 write!(f, "ダブルクォーテーションを閉じてください")
             }
-            e => write!(f, "不明なエラーです: {e}"),
+            Other => write!(f, "不明なエラーです"),
         }
     }
 }

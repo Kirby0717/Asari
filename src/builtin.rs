@@ -1,38 +1,83 @@
-#![allow(unused)]
 use crate::value::Value;
-use std::fmt::Display;
 
-#[derive(Clone, Debug)]
+use std::fmt::Display;
+use std::io::{Error as IoError, Read, Write};
+
+#[derive(Debug)]
 pub enum Error {
-    CommandNotFound,
     Exit(i32),
     InvalidArgs,
-    Runtime(String),
+    Stdio(std::io::Error),
+    Other(String),
+}
+impl From<IoError> for Error {
+    fn from(value: IoError) -> Self {
+        Error::Stdio(value)
+    }
 }
 impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{self:?}")
     }
 }
-type Result<T> = ::std::result::Result<T, Error>;
+pub type Result<T> = ::std::result::Result<T, Error>;
 
-pub fn run(name: &str, args: &[Value]) -> Result<i32> {
-    match name {
-        "echo" => echo(args),
-        "cd" => cd(args),
-        "exit" => exit(args),
-        "mkdir" => mkdir(args),
-        _ => Err(Error::CommandNotFound),
-    }
+#[derive(Clone, Copy, Debug)]
+pub enum BuiltinCommand {
+    Echo,
+    Cd,
+    Exit,
+    Mkdir,
 }
-fn echo(args: &[Value]) -> Result<i32> {
+pub fn find_command(name: &str) -> Option<BuiltinCommand> {
+    use BuiltinCommand::*;
+    Some(match name {
+        "echo" => Echo,
+        "cd" => Cd,
+        "exit" => Exit,
+        "mkdir" => Mkdir,
+        _ => None?,
+    })
+}
+pub fn run(
+    command: BuiltinCommand,
+    args: &[Value],
+    stdin: Box<dyn Read>,
+    stdout: Box<dyn Write>,
+    stderr: Box<dyn Write>,
+) -> Result<i32> {
+    use BuiltinCommand::*;
+    let result = match command {
+        Echo => echo(args, stdin, stdout, stderr),
+        Cd => cd(args, stdin, stdout, stderr),
+        Exit => exit(args, stdin, stdout, stderr),
+        Mkdir => mkdir(args, stdin, stdout, stderr),
+    };
+    if let Err(Error::Stdio(e)) = &result
+        && e.kind() == std::io::ErrorKind::BrokenPipe
+    {
+        return Ok(0);
+    }
+    result
+}
+fn echo(
+    args: &[Value],
+    _stdin: Box<dyn Read>,
+    mut stdout: Box<dyn Write>,
+    _stderr: Box<dyn Write>,
+) -> Result<i32> {
     let args = args.iter().flat_map(Value::to_args).collect::<Vec<_>>();
     if !args.is_empty() {
-        println!("{}", args.join(" "));
+        writeln!(stdout, "{}", args.join(" ")).map_err(Error::Stdio)?;
     }
     Ok(0)
 }
-fn cd(args: &[Value]) -> Result<i32> {
+fn cd(
+    args: &[Value],
+    _stdin: Box<dyn Read>,
+    _stdout: Box<dyn Write>,
+    _stderr: Box<dyn Write>,
+) -> Result<i32> {
     if 1 < args.len() {
         return Err(Error::InvalidArgs);
     }
@@ -44,14 +89,14 @@ fn cd(args: &[Value]) -> Result<i32> {
         };
         let next_dir = std::env::current_dir()
             .map_err(|_| {
-                Error::Runtime(
+                Error::Other(
                     "現在のディレクトリが見つかりませんでした".to_string(),
                 )
             })?
             .join(dir);
         if next_dir.exists() && next_dir.is_dir() {
             std::env::set_current_dir(next_dir).map_err(|_| {
-                Error::Runtime("ディレクトリの移動に失敗しました".to_string())
+                Error::Other("ディレクトリの移動に失敗しました".to_string())
             })?;
         }
         else {
@@ -59,40 +104,64 @@ fn cd(args: &[Value]) -> Result<i32> {
         }
     }
     else {
-        let home_dir = dirs::home_dir().ok_or(Error::Runtime(
+        let home_dir = dirs::home_dir().ok_or(Error::Other(
             "ホームディレクトリの取得に失敗しました".to_string(),
         ))?;
         std::env::set_current_dir(home_dir).map_err(|_| {
-            Error::Runtime("ディレクトリの移動に失敗しました".to_string())
+            Error::Other("ディレクトリの移動に失敗しました".to_string())
         })?;
     }
     Ok(0)
 }
 // 終了優先
-fn exit(args: &[Value]) -> Result<i32> {
+fn exit(
+    args: &[Value],
+    _stdin: Box<dyn Read>,
+    _stdout: Box<dyn Write>,
+    mut stderr: Box<dyn Write>,
+) -> Result<i32> {
     if 1 < args.len() {
-        eprintln!("引数が2つ以上です");
+        writeln!(stderr, "引数が2つ以上です")?;
     }
 
     let mut exit_code = 0;
     if let Some(arg) = args.first() {
-        if let Value::Int(arg) = arg {
-            if let Ok(code) = i32::try_from(*arg) {
-                exit_code = code;
+        match arg {
+            Value::Int(arg) => {
+                if let Ok(code) = i32::try_from(*arg) {
+                    exit_code = code;
+                }
+                else {
+                    writeln!(stderr, "数値が終了コードの範囲外です")?;
+                    exit_code = -1;
+                }
             }
-            else {
-                eprintln!("引数が終了コードの範囲外です");
+            Value::String(arg) => {
+                if let Ok(code) = arg.parse::<i32>() {
+                    exit_code = code;
+                }
+                else {
+                    writeln!(
+                        stderr,
+                        "文字列を終了コードに変換できませんでした"
+                    )?;
+                    exit_code = -1;
+                }
+            }
+            _ => {
+                writeln!(stderr, "引数が整数または文字列ではありません")?;
                 exit_code = -1;
             }
-        }
-        else {
-            eprintln!("引数が整数ではありません");
-            exit_code = -1;
         }
     }
     Err(Error::Exit(exit_code))
 }
-fn mkdir(args: &[Value]) -> Result<i32> {
+fn mkdir(
+    args: &[Value],
+    _stdin: Box<dyn Read>,
+    _stdout: Box<dyn Write>,
+    mut stderr: Box<dyn Write>,
+) -> Result<i32> {
     if args.is_empty() {
         return Err(Error::InvalidArgs);
     }
@@ -103,7 +172,7 @@ fn mkdir(args: &[Value]) -> Result<i32> {
             Ok(_) => {}
             Err(e) => {
                 exit_status = 1;
-                eprintln!("{e}");
+                writeln!(stderr, "{e}")?;
             }
         }
     }

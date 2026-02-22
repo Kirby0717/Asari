@@ -4,8 +4,8 @@ use std::{
     string::String,
 };
 
-use super::{
-    exec::{Output, execute_shell_command},
+use crate::{
+    exec::{Error as ExecError, Output, execute_shell_command},
     parse::{
         CommandPart, Expr, ExprInfix, ExprPostfix, ExprPrefix, Primary,
         Spanned, SpecialVar,
@@ -13,8 +13,9 @@ use super::{
     value::*,
 };
 
+type Result<T> = ::std::result::Result<T, ExecError>;
 #[derive(Clone, Debug)]
-pub enum EvalError {
+pub enum Error {
     InvalidType,
     OverFlow,
     UnwrapNone,
@@ -24,26 +25,6 @@ pub enum EvalError {
     InvalidUtf8Path,
     InvalidGlobPattern,
 }
-#[derive(Clone, Debug)]
-pub enum ExecuteError {
-    Exit(i32),
-    EvalError(EvalError),
-    CommandError(String),
-    InvalidCommandType,
-    CommandOutIsNotUtf8,
-}
-impl From<EvalError> for ExecuteError {
-    #[inline(always)]
-    fn from(value: EvalError) -> Self {
-        ExecuteError::EvalError(value)
-    }
-}
-impl std::fmt::Display for ExecuteError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{self:?}")
-    }
-}
-type Result<T> = ::std::result::Result<T, ExecuteError>;
 
 #[derive(Clone, Debug)]
 pub struct Context {
@@ -130,7 +111,7 @@ macro_rules! checked_prefix {
         ($type($var), $prefix)
     };
     (body [$type:ident($var:ident)] $prefix: ident $op:tt) => {
-        ($var.$op().ok_or(EvalError::OverFlow)?).into()
+        ($var.$op().ok_or(Error::OverFlow)?).into()
     };
 }
 macro_rules! primitive_infix {
@@ -144,7 +125,7 @@ macro_rules! checked_infix {
         ($type($var1), $type($var2), $infix)
     };
     (body [$type:ident($var1:ident, $var2:ident)] $infix: ident $op:tt) => {
-        ($var1.$op($var2).ok_or(EvalError::OverFlow)?).into()
+        ($var1.$op($var2).ok_or(Error::OverFlow)?).into()
     };
 }
 
@@ -165,7 +146,7 @@ fn eval_prefix(
             [ Int(a) ] { Neg checked_neg }
         }
         @extra:
-        _ => return Err(EvalError::InvalidType.into()),
+        _ => return Err(Error::InvalidType.into()),
     }
 }
 fn eval_infix(
@@ -209,7 +190,7 @@ fn eval_infix(
         @extra:
         (String(a), String(b), Add) => (a + &b).into(),
         (Option(a), b, UnwrapOr) => *a.unwrap_or(Box::new(b)),
-        _ => return Err(EvalError::InvalidType.into()),
+        _ => return Err(Error::InvalidType.into()),
     }
 }
 fn eval_postfix(
@@ -226,7 +207,7 @@ fn eval_postfix(
                 *a
             }
             else {
-                return Err(EvalError::UnwrapNone.into());
+                return Err(Error::UnwrapNone.into());
             }
         }
         (Option(a), IsSome) => a.is_some().into(),
@@ -236,7 +217,7 @@ fn eval_postfix(
             let index = eval_expr(index, env)?;
             let Int(index) = index
             else {
-                return Err(EvalError::InvalidType.into());
+                return Err(Error::InvalidType.into());
             };
             let index = if index >= 0 {
                 // 正
@@ -254,7 +235,7 @@ fn eval_postfix(
             index.and_then(|index| v.get(index).cloned()).into()
         }
         (v, Cast(t)) => v.cast(&t.inner)?,
-        _ => return Err(EvalError::InvalidType.into()),
+        _ => return Err(Error::InvalidType.into()),
     })
 }
 fn eval_primary(
@@ -270,7 +251,7 @@ fn eval_primary(
         ShellVar(shell_var) => env
             .shell_vars
             .get(shell_var)
-            .ok_or(EvalError::UnknownShellVar)?
+            .ok_or(Error::UnknownShellVar)?
             .clone(),
         Paren(expr) => eval_expr(expr, env)?,
         Array(array) => array
@@ -290,25 +271,25 @@ fn eval_primary(
         CommandSubst(shell_command) => {
             let mut child_env = env.clone();
             let mut output = Output::Capture(Vec::new());
-            env.last_status = child_env.last_status;
             match execute_shell_command(
                 shell_command,
                 &mut output,
                 &mut child_env,
             ) {
                 Ok(()) => {}
-                Err(ExecuteError::Exit(code)) => {
+                Err(ExecError::Exit(code)) => {
                     env.last_status = code;
                     return Ok("".to_string().into());
                 }
                 Err(e) => return Err(e),
             }
+            env.last_status = child_env.last_status;
             let Output::Capture(output) = output
             else {
                 unreachable!()
             };
             std::string::String::from_utf8(output)
-                .map_err(|_| ExecuteError::CommandOutIsNotUtf8)?
+                .map_err(|_| ExecError::CommandOutIsNotUtf8)?
                 .trim_end_matches(['\r', '\n'])
                 .to_string()
                 .into()
@@ -363,11 +344,11 @@ fn tilde_expand(path: &str) -> Result<String> {
             // ホームディレクトリの取得
             let Some(home_dir) = dirs::home_dir()
             else {
-                return Err(EvalError::NoHomeDir.into());
+                return Err(Error::NoHomeDir.into());
             };
             let Ok(home_dir) = home_dir.into_os_string().into_string()
             else {
-                return Err(EvalError::InvalidUtf8Path.into());
+                return Err(Error::InvalidUtf8Path.into());
             };
             return Ok(home_dir + path);
         }
@@ -391,7 +372,7 @@ fn glob_expand<P: AsRef<Path>>(
     else {
         // 無いならマッチしたとして返却
         let match_path =
-            base.to_str().ok_or(EvalError::InvalidUtf8Path)?.to_string();
+            base.to_str().ok_or(Error::InvalidUtf8Path)?.to_string();
         return Ok(vec![match_path]);
     };
 
@@ -402,7 +383,7 @@ fn glob_expand<P: AsRef<Path>>(
     };
     let Some(pattern) = pattern.to_str()
     else {
-        return Err(EvalError::InvalidUtf8Path.into());
+        return Err(Error::InvalidUtf8Path.into());
     };
 
     // ファイル or フォルダの列挙
@@ -467,7 +448,7 @@ fn glob_match(pattern: &[char], target: &[char]) -> Result<bool> {
                 }
                 else {
                     // 閉じられていないならエラー
-                    return Err(EvalError::InvalidGlobPattern.into());
+                    return Err(Error::InvalidGlobPattern.into());
                 }
             }
             pc => {
@@ -502,7 +483,7 @@ fn glob_match_class(set: &[char], target: char) -> Result<bool> {
             // その次があれば範囲
             if let Some(&r) = iter.next() {
                 if c > r {
-                    return Err(EvalError::InvalidGlobPattern.into());
+                    return Err(Error::InvalidGlobPattern.into());
                 }
                 set.push(MatchSet::Range(c, r));
             }
@@ -516,11 +497,13 @@ fn glob_match_class(set: &[char], target: char) -> Result<bool> {
             set.push(MatchSet::Normal(c));
         }
     }
+
     // マッチ確認
     let match_flag = set.iter().any(|pattern| match pattern {
         MatchSet::Normal(c) => *c == target,
         MatchSet::Range(l, r) => (*l..=*r).contains(&target),
     });
+
     // 除外を考慮して返す
     Ok(exclusion_flag ^ match_flag)
 }
