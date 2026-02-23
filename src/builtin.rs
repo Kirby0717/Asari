@@ -24,18 +24,14 @@ pub type Result<T> = ::std::result::Result<T, Error>;
 
 #[derive(Clone, Copy, Debug)]
 pub enum BuiltinCommand {
-    Echo,
     Cd,
     Exit,
-    Mkdir,
 }
 pub fn find_command(name: &str) -> Option<BuiltinCommand> {
     use BuiltinCommand::*;
     Some(match name {
-        "echo" => Echo,
         "cd" => Cd,
         "exit" => Exit,
-        "mkdir" => Mkdir,
         _ => None?,
     })
 }
@@ -48,10 +44,8 @@ pub fn run(
 ) -> Result<i32> {
     use BuiltinCommand::*;
     let result = match command {
-        Echo => echo(args, stdin, stdout, stderr),
         Cd => cd(args, stdin, stdout, stderr),
         Exit => exit(args, stdin, stdout, stderr),
-        Mkdir => mkdir(args, stdin, stdout, stderr),
     };
     if let Err(Error::Stdio(e)) = &result
         && e.kind() == std::io::ErrorKind::BrokenPipe
@@ -59,18 +53,6 @@ pub fn run(
         return Ok(0);
     }
     result
-}
-fn echo(
-    args: &[Value],
-    _stdin: Box<dyn Read>,
-    mut stdout: Box<dyn Write>,
-    _stderr: Box<dyn Write>,
-) -> Result<i32> {
-    let args = args.iter().flat_map(Value::to_args).collect::<Vec<_>>();
-    if !args.is_empty() {
-        writeln!(stdout, "{}", args.join(" ")).map_err(Error::Stdio)?;
-    }
-    Ok(0)
 }
 fn cd(
     args: &[Value],
@@ -155,26 +137,4 @@ fn exit(
         }
     }
     Err(Error::Exit(exit_code))
-}
-fn mkdir(
-    args: &[Value],
-    _stdin: Box<dyn Read>,
-    _stdout: Box<dyn Write>,
-    mut stderr: Box<dyn Write>,
-) -> Result<i32> {
-    if args.is_empty() {
-        return Err(Error::InvalidArgs);
-    }
-
-    let mut exit_status = 0;
-    for dir in args.iter().flat_map(Value::to_args) {
-        match std::fs::create_dir_all(dir) {
-            Ok(_) => {}
-            Err(e) => {
-                exit_status = 1;
-                writeln!(stderr, "{e}")?;
-            }
-        }
-    }
-    Ok(exit_status)
 }
