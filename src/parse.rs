@@ -74,7 +74,7 @@ pub enum Statement {
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub struct EnvAssign {
     pub name: Spanned<String>,
-    pub value: Spanned<CommandPart>,
+    pub value: Spanned<Expr>,
 }
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub struct Pipeline {
@@ -88,7 +88,7 @@ pub enum Pipe {
 }
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub struct Command {
-    pub temp_env: Vec<Spanned<(Spanned<String>, Spanned<CommandPart>)>>,
+    pub temp_env: Vec<Spanned<(Spanned<String>, Spanned<Expr>)>>,
     pub name: Spanned<CommandPart>,
     pub args: Vec<Spanned<CommandPart>>,
     pub redirects: Vec<Spanned<Redirect>>,

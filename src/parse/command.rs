@@ -28,13 +28,7 @@ pub fn statement(input: &mut Input) -> SpannedResult<Statement> {
     .parse_next(input)
 }
 pub fn env_assign(input: &mut Input) -> SpannedResult<EnvAssign> {
-    (
-        preceded('$', ident).spanned(),
-        space1,
-        "=",
-        space1,
-        command_part,
-    )
+    (preceded('$', ident).spanned(), space1, "=", space1, expr)
         .map(|(name, _, _, _, value)| EnvAssign { name, value })
         .spanned()
         .parse_next(input)
@@ -96,14 +90,8 @@ pub fn command(input: &mut Input) -> SpannedResult<Command> {
 }
 pub fn temp_env(
     input: &mut Input,
-) -> SpannedResult<(Spanned<String>, Spanned<CommandPart>)> {
-    (
-        preceded('$', ident).spanned(),
-        space1,
-        ":=",
-        space1,
-        command_part,
-    )
+) -> SpannedResult<(Spanned<String>, Spanned<Expr>)> {
+    (preceded('$', ident).spanned(), space1, ":=", space1, expr)
         .map(|(var, _, _, _, val)| (var, val))
         .spanned()
         .parse_next(input)

@@ -1,5 +1,5 @@
 use crate::builtin::{Error as BuiltinError, find_command};
-use crate::eval::{Context, Error as EvalError, eval_command_part};
+use crate::eval::{Context, Error as EvalError, eval_command_part, eval_expr};
 use crate::parse::{
     Command, CommandPart, InputRedirect, MergeRedirect, OutputMode,
     OutputRedirect, Pipe, Pipeline, Redirect, ShellCommand, Spanned, Statement,
@@ -26,7 +26,8 @@ pub enum Error {
     InvalidRedirectFileType,
     FailOpenRedirectFile(IoError),
     CommandOutIsNotUtf8,
-    EnvAssignNotString,
+    EnvAssignNotStringOrNone,
+    TempEnvAssignNotString,
 }
 impl From<EvalError> for Error {
     #[inline(always)]
@@ -120,13 +121,20 @@ pub fn execute_statement(
         }
         EnvAssign(env_assign) => {
             let name = &env_assign.inner.name.inner;
-            let value = eval_command_part(&env_assign.inner.value, env)?;
-            let Value::String(value) = value
-            else {
-                return Err(Error::EnvAssignNotString);
-            };
-            // シングルスレッドでのみ環境変数を書き換えているので安全
-            unsafe { std::env::set_var(name, value) };
+            let value = eval_expr(&env_assign.inner.value, env)?;
+            match value {
+                Value::String(value) => {
+                    // シングルスレッドでのみ環境変数を書き換えているので安全
+                    unsafe { std::env::set_var(name, value) };
+                }
+                Value::Option(None) => {
+                    // シングルスレッドでのみ環境変数を書き換えているので安全
+                    unsafe { std::env::remove_var(name) };
+                }
+                _ => {
+                    return Err(Error::EnvAssignNotStringOrNone);
+                }
+            }
         }
     }
     Ok(())
@@ -267,6 +275,21 @@ impl ResolvedCommand {
             return Err(Error::EmptyCommand);
         }
 
+        // 一時環境変数の評価
+        let envs: Vec<_> = command
+            .inner
+            .temp_env
+            .iter()
+            .map(|temp_env| {
+                let (env_var, env_val) = &temp_env.inner;
+                let Value::String(env_val) = eval_expr(env_val, env)?
+                else {
+                    return Err(Error::TempEnvAssignNotString);
+                };
+                Ok((env_var.inner.clone(), env_val))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
         // 引数の評価
         let args: Vec<_> = command
             .inner
@@ -289,7 +312,7 @@ impl ResolvedCommand {
 
         Ok(Self {
             command,
-            envs: vec![],
+            envs,
             args,
             stdin: StdioInputConfig::default(),
             stdout: StdioOutputConfig::default(),
