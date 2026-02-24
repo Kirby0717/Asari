@@ -1,6 +1,8 @@
 use super::eval::Error;
 
-#[derive(Clone, Debug, PartialEq, PartialOrd)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum Value {
     String(String),
     Int(i64),
@@ -10,7 +12,7 @@ pub enum Value {
     Option(Option<Box<Value>>),
     Unit,
 }
-#[derive(Clone, Debug, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum Type {
     String,
     Int,

@@ -2,55 +2,68 @@ use super::*;
 
 // 変数と配列とクォート系と括弧のみのexpr_primary
 pub fn simple_expr_primary(input: &mut Input) -> SpannedResult<Primary> {
-    dispatch!(peek(any);
-        '\'' => quoted_string.map(Primary::String),
-        '"' => double_quoted_string.map(Primary::String),
-        '$' => preceded('$', alt((
-            delimited(('(', space0), shell_command, (space0, ')'))
-                .map(|shell_command| Primary::CommandSubst(Box::new(shell_command))),
-            special_var.map(Primary::SpecialVar),
-            ident.map(Primary::EnvVar),
-        ))),
-        '@' => preceded('@', ident).map(Primary::ShellVar),
-        '(' => alt((
-            ('(', space0, ')').value(Primary::Unit),
-            delimited(('(', space0), expr, (space0, ')'))
-                .map(|expr| Primary::Paren(Box::new(expr)))
-        )),
-        'r' => raw_string.map(Primary::String),
-        'p' => path_string.map(Primary::PathString),
-        '[' => delimited(('[', space0), separated(0.., expr, delimited(space0, ',', space0)), ']')
-            .map(|exprs| {
-                Primary::Array(exprs)
-            }),
-        _ => fail,
+    trace(
+        "simple_expr_primary",
+        dispatch! {peek(any);
+            '\'' => quoted_string.map(Primary::String),
+            '"' => double_quoted_string.map(Primary::String),
+            '$' => preceded('$', alt((
+                delimited(('(', space0), command_line, (space0, ')'))
+                    .map(|shell_command| Primary::CommandSubst(Box::new(shell_command))),
+                special_var.map(Primary::SpecialVar),
+                ident.cut().map(Primary::EnvVar),
+            ))),
+            '@' => preceded('@', ident).cut().map(Primary::ShellVar),
+            '(' => alt((
+                ('(', space0, ')').value(Primary::Unit),
+                delimited(('(', space0), expr, (space0, ')'))
+                    .map(|expr| Primary::Paren(Box::new(expr)))
+            )),
+            'r' => raw_string.map(Primary::String),
+            'p' => path_string.map(Primary::PathString),
+            '[' => delimited(('[', space0), separated(0.., expr, delimited(space0, ',', space0)), ']')
+                .map(|exprs| {
+                    Primary::Array(exprs)
+                }),
+            _ => fail,
+        },
     )
     .spanned()
     .parse_next(input)
 }
 pub fn simple_expr_postfix(input: &mut Input) -> SpannedResult<ExprPostfix> {
     use ExprPostfix::*;
-    dispatch!(any;
-        '!' => empty.value(Unwrap),
-        '?' => empty.value(IsSome),
-        '@' => empty.value(Length),
-        '[' => delimited(space0, expr, (space0, ']'))
-            .map(|index|Index(Box::new(index))),
-        _ => fail,
+    trace(
+        "simple_expr_postfix",
+        dispatch! {any;
+            '!' => empty.value(Unwrap),
+            '?' => empty.value(IsSome),
+            '@' => empty.value(Length),
+            '[' => delimited(space0, expr, (space0, ']'))
+                .map(|index|Index(Box::new(index))),
+            _ => fail,
+        },
     )
     .spanned()
     .parse_next(input)
 }
 pub fn simple_expr_infix(input: &mut Input) -> SpannedResult<ExprInfix> {
     use ExprInfix::*;
-    dispatch!(any;
-        '^' => empty.value(UnwrapOr),
-        _ => fail,
+    trace(
+        "simple_expr_infix",
+        dispatch! {any;
+            '^' => empty.value(UnwrapOr),
+            _ => fail,
+        },
     )
     .spanned()
     .parse_next(input)
 }
+#[inline(always)]
 pub fn simple_expr(input: &mut Input) -> SpannedResult<Expr> {
+    trace("simple_expr", simple_expr_pratt).parse_next(input)
+}
+pub fn simple_expr_pratt(input: &mut Input) -> SpannedResult<Expr> {
     // 値
     let primary = simple_expr_primary.parse_next(input)?;
     let mut lhs = Spanned {

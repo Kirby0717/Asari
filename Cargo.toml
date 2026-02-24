@@ -1,16 +1,18 @@
 [package]
 name = "asari"
 default-run = "asari"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.4"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
 anyhow = "1"
-clap = "4"
+clap = { version = "4", features = ["derive"] }
 dirs = "6"
 unicode-ident = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [dependencies.winnow]
 version = "0.7"
-#features = ["debug"]
+features = ["debug"]

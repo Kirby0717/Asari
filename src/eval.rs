@@ -1,20 +1,20 @@
+use crate::exec::Error as ExecError;
+use crate::parse::{
+    CommandPart, Expr, ExprInfix, ExprPostfix, ExprPrefix, Primary, Spanned,
+    SpecialVar,
+};
+use crate::value::*;
+
 use std::{
     collections::HashMap,
     path::{Component, Path, PathBuf},
     string::String,
 };
 
-use crate::{
-    exec::{Error as ExecError, Output, execute_shell_command},
-    parse::{
-        CommandPart, Expr, ExprInfix, ExprPostfix, ExprPrefix, Primary,
-        Spanned, SpecialVar,
-    },
-    value::*,
-};
+use serde::{Deserialize, Serialize};
 
 type Result<T> = ::std::result::Result<T, ExecError>;
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub enum Error {
     InvalidType,
     OverFlow,
@@ -24,12 +24,15 @@ pub enum Error {
     NoHomeDir,
     InvalidUtf8Path,
     InvalidGlobPattern,
+    SubstError(std::io::Error),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Context {
     pub shell_name: String,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub shell_vars: HashMap<String, Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_pid: Option<u32>,
     pub last_status: i32,
 }
@@ -269,26 +272,33 @@ fn eval_primary(
             .into(),
         Unit => ().into(),
         CommandSubst(shell_command) => {
-            let mut child_env = env.clone();
-            let mut output = Output::Capture(Vec::new());
-            match execute_shell_command(
-                shell_command,
-                &mut output,
-                &mut child_env,
-            ) {
-                Ok(()) => {}
-                Err(ExecError::Exit(code)) => {
-                    env.last_status = code;
-                    return Ok("".to_string().into());
-                }
-                Err(e) => return Err(e),
-            }
-            env.last_status = child_env.last_status;
-            let Output::Capture(output) = output
-            else {
-                unreachable!()
-            };
-            std::string::String::from_utf8(output)
+            use std::process::Stdio;
+
+            // 実行すべきコマンドとシェル変数などを含んだ環境を一時ファイルへ保存
+            let path =
+                crate::payload::write_payload(&crate::payload::SubstPayload {
+                    command: shell_command.as_ref().clone(),
+                    context: env.clone(),
+                })
+                .map_err(Error::SubstError)?;
+
+            // 自分自身をsubstモードで起動
+            let output = std::process::Command::new(
+                std::env::current_exe().map_err(Error::SubstError)?,
+            )
+            .arg("subst")
+            .arg(&path)
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .output()
+            .map_err(Error::SubstError)?;
+
+            // 一時ファイルを削除
+            let _ = std::fs::remove_file(&path);
+
+            env.last_status = crate::exec::status_into_i32(output.status);
+            std::string::String::from_utf8(output.stdout)
                 .map_err(|_| ExecError::CommandOutIsNotUtf8)?
                 .trim_end_matches(['\r', '\n'])
                 .to_string()
