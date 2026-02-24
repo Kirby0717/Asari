@@ -1,11 +1,11 @@
+use super::Input;
+
 use std::fmt::Display;
 
 use winnow::{
     error::{FromExternalError, ParserError},
     stream::Location,
 };
-
-use super::Input;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum ParseErrorKind {

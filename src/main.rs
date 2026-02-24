@@ -1,11 +1,38 @@
-mod builtin;
 mod check;
+mod cli;
 mod eval;
 mod exec;
 mod parse;
+mod payload;
+mod shell_command;
 mod value;
 
+use cli::*;
+
+use std::path::Path;
+
+use clap::Parser;
+
 fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+    match cli.command {
+        Some(Commands::Subst { payload_path }) => {
+            run_subst_mode(payload_path)?;
+        }
+        None => {
+            run_shell_mode()?;
+        }
+    }
+    Ok(())
+}
+
+fn run_subst_mode<P: AsRef<Path>>(payload_path: P) -> anyhow::Result<()> {
+    let mut payload = payload::read_payload(&payload_path)?;
+    exec::execute_command_line(&payload.command, &mut payload.context)?;
+    Ok(())
+}
+
+fn run_shell_mode() -> anyhow::Result<()> {
     welcome();
 
     let mut shell = exec::Shell::new();
@@ -31,7 +58,7 @@ fn main() -> anyhow::Result<()> {
 
                 // 検証
                 let mut errors = vec![];
-                check::check_shell_command(&command, &mut errors);
+                check::check_command_line(&command, &mut errors);
                 if !errors.is_empty() {
                     for error in errors {
                         eprintln!("{error:?}");
@@ -52,11 +79,9 @@ fn main() -> anyhow::Result<()> {
         }
     }
 }
-
 fn welcome() {
     println!("Welcome to Asari!");
 }
-
 fn continuation(current_dir: &std::path::Path) {
     use std::io::Write;
     print!("{}>", format_path(current_dir));
@@ -64,7 +89,6 @@ fn continuation(current_dir: &std::path::Path) {
         .flush()
         .expect("stdoutのフラッシュに失敗しました");
 }
-
 fn format_path(path: &std::path::Path) -> String {
     if let Some(home) = dirs::home_dir()
         && let Ok(relative) = path.strip_prefix(&home)

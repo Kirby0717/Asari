@@ -1,6 +1,7 @@
 use super::*;
 
 use winnow::{ascii::digit1, stream::Offset};
+
 pub fn bin_int(input: &mut Input) -> ModalResult<i64> {
     trace(
         "bin_int",
@@ -65,114 +66,136 @@ pub fn dec_number(input: &mut Input) -> ModalResult<Primary> {
     }
 }
 pub fn number(input: &mut Input) -> ModalResult<Primary> {
-    dispatch! {peek(opt(take(2_usize)));
-        Some("0b") => preceded("0b", bin_int).map(Primary::Int),
-        Some("0o") => preceded("0o", oct_int).map(Primary::Int),
-        Some("0x") => preceded("0x", hex_int).map(Primary::Int),
-        _ => dec_number,
-    }
+    trace(
+        "number",
+        dispatch! {peek(opt(take(2_usize)));
+            Some("0b") => preceded("0b", bin_int).map(Primary::Int),
+            Some("0o") => preceded("0o", oct_int).map(Primary::Int),
+            Some("0x") => preceded("0x", hex_int).map(Primary::Int),
+            _ => dec_number,
+        },
+    )
     .parse_next(input)
 }
 
 pub fn expr_primary(input: &mut Input) -> SpannedResult<Primary> {
-    dispatch!(peek(any);
-        '\'' => quoted_string.map(Primary::String),
-        '"' => double_quoted_string.map(Primary::String),
-        '$' => preceded('$', alt((
-            delimited(('(', space0), shell_command, (space0, ')'))
-                .map(|shell_command| Primary::CommandSubst(Box::new(shell_command))),
-            special_var.map(Primary::SpecialVar),
-            ident.map(Primary::EnvVar),
-        ))),
-        '@' => preceded('@', ident).map(Primary::ShellVar),
-        '(' => alt((
-            ('(', space0, ')').value(Primary::Unit),
-            delimited(('(', space0), expr, (space0, ')'))
-                .map(|expr| Primary::Paren(Box::new(expr)))
-        )),
-        'r' => raw_string.map(Primary::String),
-        'p' => path_string.map(Primary::PathString),
-        '[' => delimited(('[', space0), separated(0.., expr, delimited(space0, ',', space0)), ']')
-            .map(|exprs| {
-                Primary::Array(exprs)
-            }),
-        't' => keyword("true").value(Primary::Bool(true)),
-        'f' => keyword("false").value(Primary::Bool(false)),
-        '0'..='9' => number,
-        'n' => keyword("none").value(Primary::Option(None)),
-        's' => delimited((keyword("some"), space0, '(', space0), expr, (space0, ')'))
-            .map(|expr| Primary::Option(Some(Box::new(expr)))),
-        _ => fail,
+    trace(
+        "expr_primary",
+        dispatch! {peek(any);
+            '\'' => quoted_string.map(Primary::String),
+            '"' => double_quoted_string.map(Primary::String),
+            '$' => preceded('$', alt((
+                delimited(('(', space0), command_line, (space0, ')'))
+                    .map(|shell_command| Primary::CommandSubst(Box::new(shell_command))),
+                special_var.map(Primary::SpecialVar),
+                ident.cut().map(Primary::EnvVar),
+            ))),
+            '@' => preceded('@', ident).cut().map(Primary::ShellVar),
+            '(' => alt((
+                ('(', space0, ')').value(Primary::Unit),
+                delimited(('(', space0), expr, (space0, ')'))
+                    .map(|expr| Primary::Paren(Box::new(expr)))
+            )),
+            'r' => raw_string.map(Primary::String),
+            'p' => path_string.map(Primary::PathString),
+            '[' => delimited(('[', space0), separated(0.., expr, delimited(space0, ',', space0)), ']')
+                .map(|exprs| {
+                    Primary::Array(exprs)
+                }),
+            't' => keyword("true").value(Primary::Bool(true)),
+            'f' => keyword("false").value(Primary::Bool(false)),
+            '0'..='9' => number,
+            'n' => keyword("none").value(Primary::Option(None)),
+            's' => delimited((keyword("some"), space0, '(', space0), expr, (space0, ')'))
+                .map(|expr| Primary::Option(Some(Box::new(expr)))),
+            _ => fail,
+        },
     )
     .spanned()
     .parse_next(input)
 }
 pub fn expr_prefix(input: &mut Input) -> SpannedResult<ExprPrefix> {
     use ExprPrefix::*;
-    dispatch! {any;
-        '!' => empty.value(Not),
-        '-' => empty.value(Neg),
-        _ => fail,
-    }
+    trace(
+        "expr_prefix",
+        dispatch! {any;
+            '!' => empty.value(Not),
+            '-' => empty.value(Neg),
+            _ => fail,
+        },
+    )
     .spanned()
     .parse_next(input)
 }
 pub fn expr_infix(input: &mut Input) -> SpannedResult<ExprInfix> {
     use ExprInfix::*;
-    dispatch! {any;
-        '^' => empty.value(UnwrapOr),
-        '+' => empty.value(Add),
-        '-' => empty.value(Sub),
-        '*' => empty.value(Mul),
-        '/' => empty.value(Div),
-        '%' => empty.value(Rem),
-        '=' => '='.value(Equal),
-        '!' => '='.value(NotEqual),
-        '<' => opt('='.value(LessEqual))
-                .map(|c| c.unwrap_or(Less)),
-        '>' => opt('='.value(GreaterEqual))
-                .map(|c| c.unwrap_or(Greater)),
-        '&' => '&'.value(And),
-        '|' => '|'.value(Or),
-        _ => fail,
-    }
+    trace(
+        "expr_infix",
+        dispatch! {any;
+            '^' => empty.value(UnwrapOr),
+            '+' => empty.value(Add),
+            '-' => empty.value(Sub),
+            '*' => empty.value(Mul),
+            '/' => empty.value(Div),
+            '%' => empty.value(Rem),
+            '=' => '='.value(Equal),
+            '!' => '='.value(NotEqual),
+            '<' => opt('='.value(LessEqual))
+                    .map(|c| c.unwrap_or(Less)),
+            '>' => opt('='.value(GreaterEqual))
+                    .map(|c| c.unwrap_or(Greater)),
+            '&' => '&'.value(And),
+            '|' => '|'.value(Or),
+            _ => fail,
+        },
+    )
     .spanned()
     .parse_next(input)
 }
 pub fn expr_postfix(input: &mut Input) -> SpannedResult<ExprPostfix> {
     use ExprPostfix::*;
-    dispatch! {any;
-        '!' => empty.value(Unwrap),
-        '?' => empty.value(IsSome),
-        '@' => empty.value(Length),
-        '[' => delimited(space0, expr, (space0, ']'))
-            .map(|index| Index(Box::new(index))),
-        'a' => preceded(('s', space0), expr_type)
-            .map(Cast),
-        _ => fail,
-    }
+    trace(
+        "expr_prefix",
+        dispatch! {any;
+            '!' => empty.value(Unwrap),
+            '?' => empty.value(IsSome),
+            '@' => empty.value(Length),
+            '[' => delimited(space0, expr, (space0, ']'))
+                .map(|index| Index(Box::new(index))),
+            'a' => preceded(('s', space0), expr_type)
+                .map(Cast),
+            _ => fail,
+        },
+    )
     .spanned()
     .parse_next(input)
 }
 pub fn expr_type(input: &mut Input) -> SpannedResult<Type> {
     use Type::*;
     let mut type_name = take_while(1.., 'a'..='z');
-    dispatch! {type_name;
-        "string" => empty.value(String),
-        "int" => empty.value(Int),
-        "float" => empty.value(Float),
-        "bool" => empty.value(Bool),
-        "array" => delimited((space0, '<', space0), expr_type, (space0, '>', space0))
-            .map(|t| Array(Box::new(t.inner))),
-        "option" => delimited((space0, '<', space0), expr_type, (space0, '>', space0))
-            .map(|t| Option(Box::new(t.inner))),
-        "unit" => empty.value(Unit),
-        _ => fail,
-    }
+    trace(
+        "expr_type",
+        dispatch! {type_name;
+            "string" => empty.value(String),
+            "int" => empty.value(Int),
+            "float" => empty.value(Float),
+            "bool" => empty.value(Bool),
+            "array" => delimited((space0, '<', space0), expr_type, (space0, '>', space0))
+                .map(|t| Array(Box::new(t.inner))),
+            "option" => delimited((space0, '<', space0), expr_type, (space0, '>', space0))
+                .map(|t| Option(Box::new(t.inner))),
+            "unit" => empty.value(Unit),
+            _ => fail,
+        },
+    )
     .spanned()
     .parse_next(input)
 }
 pub fn expr(input: &mut Input) -> SpannedResult<Expr> {
+    trace("expr", expr_pratt_top).parse_next(input)
+}
+#[inline(always)]
+fn expr_pratt_top(input: &mut Input) -> SpannedResult<Expr> {
     expr_pratt(input, 0)
 }
 fn expr_pratt(input: &mut Input, min_power: i32) -> SpannedResult<Expr> {
@@ -199,8 +222,8 @@ fn expr_pratt(input: &mut Input, min_power: i32) -> SpannedResult<Expr> {
     };
 
     loop {
-        let _ = space0.parse_next(input)?;
         let checkpoint = input.checkpoint();
+        let _ = space0.parse_next(input)?;
 
         // 中置演算子
         if let Some(infix) = opt(expr_infix).parse_next(input)? {
@@ -226,6 +249,7 @@ fn expr_pratt(input: &mut Input, min_power: i32) -> SpannedResult<Expr> {
             continue;
         }
 
+        input.reset(&checkpoint);
         break;
     }
 
