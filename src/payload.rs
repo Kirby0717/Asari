@@ -23,8 +23,25 @@ impl std::fmt::Display for Error {
     }
 }
 
+pub struct TempFile(PathBuf);
+impl AsRef<std::ffi::OsStr> for TempFile {
+    fn as_ref(&self) -> &std::ffi::OsStr {
+        self.0.as_os_str()
+    }
+}
+impl AsRef<Path> for TempFile {
+    fn as_ref(&self) -> &Path {
+        self.0.as_path()
+    }
+}
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 // 一時ファイルへファイルを保存
-pub fn write_payload(payload: &SubstPayload) -> std::io::Result<PathBuf> {
+pub fn write_payload(payload: &SubstPayload) -> std::io::Result<TempFile> {
     let temp_dir = std::env::temp_dir();
 
     // 適当に被らなさそうな名前を被らなくなるまで作る
@@ -46,7 +63,7 @@ pub fn write_payload(payload: &SubstPayload) -> std::io::Result<PathBuf> {
 
     let json = serde_json::to_vec(payload).unwrap();
     std::fs::write(&path, json)?;
-    Ok(path)
+    Ok(TempFile(path))
 }
 
 pub fn read_payload<P: AsRef<Path>>(path: P) -> Result<SubstPayload, Error> {

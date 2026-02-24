@@ -92,7 +92,7 @@ fn execute_statement(
                 .iter()
                 .map(|arg| eval_command_part(arg, env))
                 .collect::<Result<Vec<_>>>()?;
-            crate::shell_command::run(command, &args)?;
+            env.last_status = crate::shell_command::run(command, &args)?;
         }
         Pipeline(pipeline) => {
             // Exitエラーは伝播させる
@@ -557,6 +557,10 @@ fn get_path() -> Vec<PathBuf> {
             static BUILTIN_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
                 std::env::current_exe()
                     .expect("自身のファイルパスの取得に失敗しました")
+                    .parent()
+                    .expect("親ディレクトリの取得に失敗しました")
+                    .join("builtin")
+                    .to_path_buf()
             });
             // 最初にビルトインコマンドを探す
             [BUILTIN_DIR.clone()]

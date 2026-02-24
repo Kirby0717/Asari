@@ -27,9 +27,8 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn run_subst_mode<P: AsRef<Path>>(payload_path: P) -> anyhow::Result<()> {
-    let mut payload = payload::read_payload(payload_path)?;
+    let mut payload = payload::read_payload(&payload_path)?;
     exec::execute_command_line(&payload.command, &mut payload.context)?;
-
     Ok(())
 }
 

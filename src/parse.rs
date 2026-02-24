@@ -19,7 +19,7 @@ use winnow::{
     LocatingSlice,
     combinator::{
         alt, delimited, dispatch, empty, fail, not, opt, peek, preceded,
-        repeat, separated, terminated, trace,
+        repeat, separated, trace,
     },
     prelude::*,
     token::{any, rest, take, take_till, take_until, take_while},
@@ -65,6 +65,7 @@ impl<T: std::fmt::Display> std::fmt::Display for Spanned<T> {
 
 #[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct CommandLine {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub statements: Vec<Spanned<Statement>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comment: Option<Spanned<String>>,

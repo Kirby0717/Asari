@@ -1,11 +1,14 @@
-use std::io::Write;
+use std::{
+    env::args,
+    io::{Write, stdout},
+};
 
 fn main() {
-    if let Err(e) = writeln!(
-        std::io::stdout(),
-        "{}",
-        std::env::args().skip(1).collect::<Vec<_>>().join(" ")
-    ) {
+    let result =
+        writeln!(stdout(), "{}", args().skip(1).collect::<Vec<_>>().join(" "));
+    if let Err(e) = result
+        && e.kind() != std::io::ErrorKind::BrokenPipe
+    {
         eprintln!("{e}");
     }
 }

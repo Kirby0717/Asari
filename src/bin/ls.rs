@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, process::exit};
 
 fn main() {
     let current_dir = std::env::current_dir()
@@ -17,9 +17,14 @@ fn main() {
         current_dir
     };
 
-    let mut files = dir
-        .read_dir()
-        .unwrap()
+    let read_dir = match dir.read_dir() {
+        Ok(read_dir) => read_dir,
+        Err(e) => {
+            eprintln!("{e}");
+            exit(1)
+        }
+    };
+    let mut files = read_dir
         .filter_map(|entry| entry.ok())
         .filter_map(|entry| entry.file_name().into_string().ok())
         .filter(|file_name| !file_name.starts_with('.'))

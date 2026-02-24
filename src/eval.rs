@@ -294,9 +294,6 @@ fn eval_primary(
             .output()
             .map_err(Error::SubstError)?;
 
-            // 一時ファイルを削除
-            let _ = std::fs::remove_file(&path);
-
             env.last_status = crate::exec::status_into_i32(output.status);
             std::string::String::from_utf8(output.stdout)
                 .map_err(|_| ExecError::CommandOutIsNotUtf8)?
