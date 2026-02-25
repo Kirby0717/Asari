@@ -1,4 +1,4 @@
-use super::Input;
+use super::{Input, Span};
 
 use std::fmt::Display;
 use std::num::{ParseFloatError, ParseIntError};
@@ -60,6 +60,8 @@ pub enum ExprError {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CommandError {
     NoCommand,
+    InvalidPipe,
+    InvalidRedirect,
     NoRedirectTarget,
     NoValue,
     NoAssignEquals(char),
@@ -157,6 +159,8 @@ impl Display for CommandError {
         use CommandError::*;
         match self {
             NoCommand => write!(f, "コマンドがありません"),
+            InvalidPipe => write!(f, "パイプは使えません"),
+            InvalidRedirect => write!(f, "リダイレクトは使えません"),
             NoRedirectTarget => write!(f, "リダイレクト先が指定されていません"),
             NoValue => write!(f, "値がありません"),
             NoAssignEquals(c) => write!(f, "{c}がありません"),
@@ -203,9 +207,7 @@ impl FromExternalError<Input<'_>, CommandError> for ParseErrorKind {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ParseError {
     pub kind: ParseErrorKind,
-    // 範囲はむずいからとりあえず位置で
-    pub span: usize,
-    //pub span: Span,
+    pub span: Span,
     //pub context: Option<String>,
 }
 impl ParseError {
@@ -213,13 +215,13 @@ impl ParseError {
         let source = **input;
         let mut display = String::new();
         display += &format!("{}\n", source.replace(['\n', '\r'], " "));
-        display += &format!("{}^ {}\n", " ".repeat(self.span), self.kind);
-        /*display += &format!(
+        //display += &format!("{}^ {}\n", " ".repeat(self.span), self.kind);
+        display += &format!(
             "{}{} {}\n",
             " ".repeat(self.span.start),
             "^".repeat(self.span.len()),
             self.kind
-        );*/
+        );
         display
     }
 }
@@ -228,8 +230,8 @@ impl ParserError<Input<'_>> for ParseError {
     fn from_input(input: &Input) -> Self {
         let pos = input.current_token_start();
         ParseError {
-            span: pos,
-            //span: pos..pos,
+            //span: pos,
+            span: pos..pos + 1,
             kind: Default::default(),
         }
     }

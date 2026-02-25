@@ -6,7 +6,7 @@ pub fn bin_int(input: &mut Input) -> ModalResult<i64> {
     trace(
         "bin_int",
         take_while(1.., '0'..='1').try_map_with_span(|s| {
-            i64::from_str_radix(s, 2).map_err(ParseErrorKind::ParseBinError)
+            i64::from_str_radix(s, 2).map_err(NumberError::InvalidBin)
         }),
     )
     .cut()
@@ -16,7 +16,7 @@ pub fn oct_int(input: &mut Input) -> ModalResult<i64> {
     trace(
         "oct_int",
         take_while(1.., '0'..='7').try_map_with_span(|s| {
-            i64::from_str_radix(s, 8).map_err(ParseErrorKind::ParseOctError)
+            i64::from_str_radix(s, 8).map_err(NumberError::InvalidOct)
         }),
     )
     .cut()
@@ -26,10 +26,7 @@ pub fn hex_int(input: &mut Input) -> ModalResult<i64> {
     trace(
         "hex_int",
         take_while(1.., ('0'..='9', 'A'..='F', 'a'..='f')).try_map_with_span(
-            |s| {
-                i64::from_str_radix(s, 16)
-                    .map_err(ParseErrorKind::ParseHexError)
-            },
+            |s| i64::from_str_radix(s, 16).map_err(NumberError::InvalidHex),
         ),
     )
     .cut()
@@ -48,18 +45,18 @@ pub fn dec_number(input: &mut Input) -> ModalResult<Primary> {
     input.reset(&start);
     if decimal_part.is_some() || exp_part.is_some() {
         let l = float_checkpoint.offset_from(&start);
-        let float = take(l)
+        let float = trace("float", take(l))
             .try_map_with_span(|s| {
-                s.parse::<f64>().map_err(ParseErrorKind::ParseFloatError)
+                s.parse::<f64>().map_err(NumberError::InvalidFloat)
             })
             .parse_next(input)?;
         Ok(Primary::Float(float))
     }
     else {
         let l = int_checkpoint.offset_from(&start);
-        let int = take(l)
+        let int = trace("dec_int", take(l))
             .try_map_with_span(|s| {
-                s.parse::<i64>().map_err(ParseErrorKind::ParseDecError)
+                s.parse::<i64>().map_err(NumberError::InvalidDec)
             })
             .parse_next(input)?;
         Ok(Primary::Int(int))
@@ -192,11 +189,7 @@ pub fn expr_type(input: &mut Input) -> SpannedResult<Type> {
     .parse_next(input)
 }
 pub fn expr(input: &mut Input) -> SpannedResult<Expr> {
-    trace("expr", expr_pratt_top).parse_next(input)
-}
-#[inline(always)]
-fn expr_pratt_top(input: &mut Input) -> SpannedResult<Expr> {
-    expr_pratt(input, 0)
+    trace("expr", |input: &mut Input| expr_pratt(input, 0)).parse_next(input)
 }
 fn expr_pratt(input: &mut Input, min_power: i32) -> SpannedResult<Expr> {
     // 前置演算子 or 値

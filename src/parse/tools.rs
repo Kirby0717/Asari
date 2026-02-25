@@ -43,27 +43,47 @@ pub trait ParserExt<I, O, E>: Parser<I, O, E> {
 impl<I, O, E, P: Parser<I, O, ErrMode<E>>> ParserModalExt<I, O, E> for P {}
 pub trait ParserModalExt<I, O, E>: Parser<I, O, ErrMode<E>> {
     #[inline(always)]
-    fn map_err_with_span<G>(
+    fn map_err_with_span<G, E2>(
         self,
         map: G,
-    ) -> impls::MapErrWithSpan<Self, G, I, O, E>
+    ) -> impls::MapErrWithSpan<Self, G, I, O, E, E2>
     where
-        G: FnMut(E) -> ParseErrorKind,
-        Self: core::marker::Sized,
+        Self: Sized,
+        G: FnMut(E) -> E2,
         I: Location,
     {
         impls::MapErrWithSpan {
             parser: self,
             map,
-            i: Default::default(),
-            o: Default::default(),
-            e: Default::default(),
+            i: PhantomData,
+            o: PhantomData,
+            e: PhantomData,
+            e2: PhantomData,
         }
     }
 }
 
 impl<I, O, P: Parser<I, O, ErrMode<ParseError>>> ParserSpanExt<I, O> for P {}
 pub trait ParserSpanExt<I, O>: Parser<I, O, ErrMode<ParseError>> {
+    #[inline(always)]
+    fn reject_with_span<G, E2>(
+        self,
+        map: G,
+    ) -> impls::RejectWithSpan<Self, G, I, O, E2>
+    where
+        Self: Sized,
+        G: FnMut(O) -> E2,
+        I: Stream + Location,
+        ParseErrorKind: FromExternalError<I, E2>,
+    {
+        impls::RejectWithSpan {
+            parser: self,
+            map,
+            i: PhantomData,
+            o: PhantomData,
+            e2: PhantomData,
+        }
+    }
     #[inline(always)]
     fn try_map_with_span<G, O2, E2>(
         self,

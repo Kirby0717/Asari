@@ -60,38 +60,77 @@ where
     }
 }
 
-pub struct MapErrWithSpan<F, G, I, O, E>
+pub struct MapErrWithSpan<F, G, I, O, E, E2>
 where
     F: Parser<I, O, ErrMode<E>>,
-    G: FnMut(E) -> ParseErrorKind,
+    G: FnMut(E) -> E2,
     I: Location,
 {
     pub(crate) parser: F,
     pub(crate) map: G,
-    pub(crate) i: core::marker::PhantomData<I>,
-    pub(crate) o: core::marker::PhantomData<O>,
-    pub(crate) e: core::marker::PhantomData<E>,
+    pub(crate) i: PhantomData<I>,
+    pub(crate) o: PhantomData<O>,
+    pub(crate) e: PhantomData<E>,
+    pub(crate) e2: PhantomData<E2>,
 }
-impl<F, G, I, O, E> Parser<I, O, ErrMode<ParseError>>
-    for MapErrWithSpan<F, G, I, O, E>
+impl<F, G, I, O, E, E2> Parser<I, O, ErrMode<ParseError>>
+    for MapErrWithSpan<F, G, I, O, E, E2>
 where
     F: Parser<I, O, ErrMode<E>>,
-    G: FnMut(E) -> ParseErrorKind,
+    G: FnMut(E) -> E2,
     I: Location,
+    ParseErrorKind: FromExternalError<I, E2>,
 {
     #[inline]
     fn parse_next(&mut self, input: &mut I) -> ModalResult<O, ParseError> {
         let begin = input.current_token_start();
-        //let span = begin..input.previous_token_end();
         self.parser.parse_next(input).map_err(|e| {
             e.map(|e| ParseError {
-                kind: (self.map)(e),
-                span: begin,
+                kind: ParseErrorKind::from_external_error(input, (self.map)(e)),
+                span: begin..begin + 1,
             })
         })
     }
 }
 
+pub struct RejectWithSpan<F, G, I, O, E2>
+where
+    F: Parser<I, O, ErrMode<ParseError>>,
+    G: FnMut(O) -> E2,
+    I: Stream + Location,
+    ParseErrorKind: FromExternalError<I, E2>,
+{
+    pub(crate) parser: F,
+    pub(crate) map: G,
+    pub(crate) i: PhantomData<I>,
+    pub(crate) o: PhantomData<O>,
+    pub(crate) e2: PhantomData<E2>,
+}
+impl<F, G, I, O, E2> Parser<I, (), ErrMode<ParseError>>
+    for RejectWithSpan<F, G, I, O, E2>
+where
+    F: Parser<I, O, ErrMode<ParseError>>,
+    G: FnMut(O) -> E2,
+    I: Stream + Location,
+    ParseErrorKind: FromExternalError<I, E2>,
+{
+    fn parse_next(&mut self, input: &mut I) -> ModalResult<(), ParseError> {
+        let begin = input.current_token_start();
+        match self.parser.parse_next(input) {
+            Ok(output) => {
+                let end = input.previous_token_end();
+                Err(ErrMode::Cut(ParseError {
+                    kind: ParseErrorKind::from_external_error(
+                        input,
+                        (self.map)(output),
+                    ),
+                    span: begin..end,
+                }))
+            }
+            Err(_) => Ok(()),
+        }
+    }
+}
 pub struct TryMapWithSpan<F, G, I, O, O2, E2>
 where
     F: Parser<I, O, ErrMode<ParseError>>,
@@ -118,11 +157,10 @@ where
         //let start = input.checkpoint();
         let begin = input.current_token_start();
         let output = self.parser.parse_next(input)?;
-        //let span = begin..input.previous_token_end();
         (self.map)(output).map_err(|err| {
             //input.reset(&start);
             ErrMode::Backtrack(ParseError {
-                span: begin,
+                span: begin..begin + 1,
                 kind: ParseErrorKind::from_external_error(input, err),
             })
         })

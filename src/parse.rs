@@ -19,7 +19,7 @@ use winnow::{
     LocatingSlice,
     combinator::{
         alt, delimited, dispatch, empty, fail, not, opt, peek, preceded,
-        repeat, separated, trace,
+        repeat, separated, terminated, trace,
     },
     prelude::*,
     token::{any, rest, take, take_till, take_until, take_while},
@@ -45,6 +45,11 @@ impl<T> Spanned<T> {
             inner: f(self.inner),
             span: self.span,
         }
+    }
+}
+impl<T> AsRef<T> for Spanned<T> {
+    fn as_ref(&self) -> &T {
+        &self.inner
     }
 }
 impl<T: PartialEq> PartialEq for Spanned<T> {
@@ -101,7 +106,7 @@ pub enum Pipe {
 #[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct Command {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub temp_env: Vec<Spanned<(Spanned<String>, Spanned<Expr>)>>,
+    pub temp_envs: Vec<Spanned<(Spanned<String>, Spanned<Expr>)>>,
     pub name: Spanned<CommandPart>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<Spanned<CommandPart>>,
@@ -304,13 +309,13 @@ fn ident(input: &mut Input) -> ModalResult<String> {
     trace(
         "ident",
         (
-            any.map_err_with_span(|()| ParseErrorKind::NoIdent)
+            any.map_err_with_span(|()| IdentError::Expected)
                 .try_map_with_span(|c| {
                     if c == '_' || is_xid_start(c) {
                         Ok(c)
                     }
                     else {
-                        Err(ParseErrorKind::NoIdent)
+                        Err(IdentError::Expected)
                     }
                 }),
             take_while(0.., is_xid_continue),
@@ -318,7 +323,7 @@ fn ident(input: &mut Input) -> ModalResult<String> {
     )
     .try_map_with_span(|(ident_start, ident_continue)| {
         if ident_start == '_' && ident_continue.is_empty() {
-            Err(ParseErrorKind::InvalidIdent)
+            Err(IdentError::Invalid)
         }
         else {
             Ok(String::from(ident_start) + ident_continue)
@@ -326,6 +331,23 @@ fn ident(input: &mut Input) -> ModalResult<String> {
     })
     .parse_next(input)
 }
+fn env_var(input: &mut Input) -> ModalResult<String> {
+    trace("env_var", |input: &mut Input| {
+        let _ = '$'.parse_next(input)?;
+        let name = ident.cut().parse_next(input)?;
+        Ok(name)
+    })
+    .parse_next(input)
+}
+fn shell_var(input: &mut Input) -> ModalResult<String> {
+    trace("env_var", |input: &mut Input| {
+        let _ = '@'.parse_next(input)?;
+        let name = ident.cut().parse_next(input)?;
+        Ok(name)
+    })
+    .parse_next(input)
+}
+
 fn keyword<'a>(
     s: &'static str,
 ) -> impl Parser<Input<'a>, &'a str, winnow::error::ErrMode<ParseError>> {

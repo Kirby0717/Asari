@@ -225,7 +225,7 @@ impl ResolvedCommand {
         // 一時環境変数の評価
         let envs: Vec<_> = command
             .inner
-            .temp_env
+            .temp_envs
             .iter()
             .map(|temp_env| {
                 let (env_var, env_val) = &temp_env.inner;
