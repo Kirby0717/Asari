@@ -1,6 +1,7 @@
 use super::Input;
 
 use std::fmt::Display;
+use std::num::{ParseFloatError, ParseIntError};
 
 use winnow::{
     error::{FromExternalError, ParserError},
@@ -9,93 +10,193 @@ use winnow::{
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum ParseErrorKind {
-    ParseBinError(std::num::ParseIntError),
-    ParseOctError(std::num::ParseIntError),
-    ParseDecError(std::num::ParseIntError),
-    ParseHexError(std::num::ParseIntError),
-    ParseFloatError(std::num::ParseFloatError),
-    NoIdent,
-    InvalidIdent,
-    InvalidUnicodeEscape(UnicodeEscapeError),
-    UnrecognizedEscape(char),
-    NoEndQuotation,
-    NoEndDoubleQuotation,
+    Literal(LiteralError),
+    Number(NumberError),
+    Ident(IdentError),
+    Expr(ExprError),
+    Command(CommandError),
     #[default]
     Other,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LiteralError {
+    UnclosedQuote,
+    UnclosedDoubleQuote,
+    UnclosedRawString,
+    UnclosedPathString,
+    UnrecognizedEscape(char),
+    UnicodeEscape(UnicodeEscapeError),
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UnicodeEscapeError {
-    NoBeginBrace,
-    InvalidUnicode,
-    NoEndBrace,
+    NoOpenBrace,
+    NoCloseBrace,
+    InvalidCodePoint,
+    InvalidHex(ParseIntError),
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NumberError {
+    InvalidBin(ParseIntError),
+    InvalidOct(ParseIntError),
+    InvalidDec(ParseIntError),
+    InvalidHex(ParseIntError),
+    InvalidFloat(ParseFloatError),
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum IdentError {
+    Expected,
+    Invalid,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExprError {
+    UnclosedParen,
+    UnclosedBracket,
+    UnclosedSome,
+    UnclosedCommandSubst,
+    UnknownType,
+    UnclosedTypeParam,
+    NoRhs,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CommandError {
+    NoCommand,
+    NoRedirectTarget,
+    NoValue,
+    NoAssignEquals(char),
 }
 impl Display for ParseErrorKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use ParseErrorKind::*;
         match self {
-            ParseBinError(e) => {
-                use std::num::IntErrorKind::*;
-                match *e.kind() {
-                    Empty => write!(f, "数値が空です"),
-                    InvalidDigit => write!(f, "2進数で書いてください"),
-                    NegOverflow => write!(f, "数値が小さすぎます"),
-                    PosOverflow => write!(f, "数値が大きすぎます"),
-                    _ => write!(f, "2進数の解析に失敗しました"),
-                }
-            }
-            ParseOctError(e) => {
-                use std::num::IntErrorKind::*;
-                match *e.kind() {
-                    Empty => write!(f, "数値が空です"),
-                    InvalidDigit => write!(f, "8進数で書いてください"),
-                    NegOverflow => write!(f, "数値が小さすぎます"),
-                    PosOverflow => write!(f, "数値が大きすぎます"),
-                    _ => write!(f, "8進数の解析に失敗しました"),
-                }
-            }
-            ParseDecError(e) => {
-                use std::num::IntErrorKind::*;
-                match *e.kind() {
-                    Empty => write!(f, "数値が空です"),
-                    InvalidDigit => write!(f, "10進数で書いてください"),
-                    NegOverflow => write!(f, "数値が小さすぎます"),
-                    PosOverflow => write!(f, "数値が大きすぎます"),
-                    _ => write!(f, "10進数の解析に失敗しました"),
-                }
-            }
-            ParseHexError(e) => {
-                use std::num::IntErrorKind::*;
-                match *e.kind() {
-                    Empty => write!(f, "数値が空です"),
-                    InvalidDigit => write!(f, "16進数で書いてください"),
-                    NegOverflow => write!(f, "数値が小さすぎます"),
-                    PosOverflow => write!(f, "数値が大きすぎます"),
-                    _ => write!(f, "16進数の解析に失敗しました"),
-                }
-            }
-            ParseFloatError(_) => write!(f, "小数の解析に失敗しました"),
-            InvalidUnicodeEscape(e) => {
-                use UnicodeEscapeError::*;
-                match e {
-                    NoBeginBrace => write!(f, "{{が必要です"),
-                    InvalidUnicode => write!(f, "不正なUnicodeです"),
-                    NoEndBrace => write!(f, "}}が必要です"),
-                }
-            }
-            NoIdent => write!(f, "名前がありません"),
-            InvalidIdent => write!(f, "不正な名前です"),
-            UnrecognizedEscape(c) => write!(f, "不明なエスケープ \\{c} です"),
-            NoEndQuotation => write!(f, "クォーテーションを閉じてください"),
-            NoEndDoubleQuotation => {
-                write!(f, "ダブルクォーテーションを閉じてください")
-            }
+            Literal(e) => e.fmt(f),
+            Number(e) => e.fmt(f),
+            Ident(e) => e.fmt(f),
+            Expr(e) => e.fmt(f),
+            Command(e) => e.fmt(f),
             Other => write!(f, "不明なエラーです"),
         }
     }
 }
+impl Display for LiteralError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use LiteralError::*;
+        match self {
+            UnclosedQuote => write!(f, "クォーテーションが閉じられていません"),
+            UnclosedDoubleQuote => {
+                write!(f, "ダブルクォーテーションが閉じられていません")
+            }
+            UnclosedRawString => write!(f, "raw文字列が閉じられていません"),
+            UnclosedPathString => write!(f, "パス文字列が閉じられていません"),
+            UnrecognizedEscape(c) => write!(f, "不明なエスケープ \\{c} です"),
+            UnicodeEscape(e) => e.fmt(f),
+        }
+    }
+}
+impl Display for UnicodeEscapeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use UnicodeEscapeError::*;
+        match self {
+            NoOpenBrace => write!(f, "{{が必要です"),
+            NoCloseBrace => write!(f, "}}が必要です"),
+            InvalidCodePoint => write!(f, "不正なUnicodeです"),
+            InvalidHex(e) => fmt_int_error(f, "16進数", e),
+        }
+    }
+}
+impl Display for NumberError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use NumberError::*;
+        match self {
+            InvalidBin(e) => fmt_int_error(f, "2進数", e),
+            InvalidOct(e) => fmt_int_error(f, "8進数", e),
+            InvalidDec(e) => fmt_int_error(f, "10進数", e),
+            InvalidHex(e) => fmt_int_error(f, "16進数", e),
+            InvalidFloat(_) => write!(f, "小数の解析に失敗しました"),
+        }
+    }
+}
+fn fmt_int_error(
+    f: &mut std::fmt::Formatter<'_>,
+    radix: &str,
+    e: &std::num::ParseIntError,
+) -> std::fmt::Result {
+    use std::num::IntErrorKind::*;
+    match e.kind() {
+        Empty => write!(f, "数値が空です"),
+        InvalidDigit => write!(f, "{radix}で書いてください"),
+        NegOverflow => write!(f, "数値が小さすぎます"),
+        PosOverflow => write!(f, "数値が大きすぎます"),
+        _ => write!(f, "{radix}の解析に失敗しました"),
+    }
+}
+impl Display for IdentError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use IdentError::*;
+        match self {
+            Expected => write!(f, "名前がありません"),
+            Invalid => write!(f, "不正な名前です"),
+        }
+    }
+}
+impl Display for ExprError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use ExprError::*;
+        match self {
+            UnclosedParen => write!(f, "()が閉じられていません"),
+            UnclosedBracket => write!(f, "[]が閉じられていません"),
+            UnclosedSome => write!(f, "some()が閉じられていません"),
+            UnclosedCommandSubst => write!(f, "$()が閉じられていません"),
+            UnknownType => write!(f, "不明な型です"),
+            UnclosedTypeParam => write!(f, "type<>が閉じられていません"),
+            NoRhs => write!(f, "演算子の右辺がありません"),
+        }
+    }
+}
+impl Display for CommandError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use CommandError::*;
+        match self {
+            NoCommand => write!(f, "コマンドがありません"),
+            NoRedirectTarget => write!(f, "リダイレクト先が指定されていません"),
+            NoValue => write!(f, "値がありません"),
+            NoAssignEquals(c) => write!(f, "{c}がありません"),
+        }
+    }
+}
+
 impl FromExternalError<Input<'_>, ParseErrorKind> for ParseErrorKind {
     fn from_external_error(_input: &Input<'_>, e: ParseErrorKind) -> Self {
         e
+    }
+}
+impl FromExternalError<Input<'_>, LiteralError> for ParseErrorKind {
+    fn from_external_error(_input: &Input<'_>, e: LiteralError) -> Self {
+        ParseErrorKind::Literal(e)
+    }
+}
+impl FromExternalError<Input<'_>, UnicodeEscapeError> for ParseErrorKind {
+    fn from_external_error(_input: &Input<'_>, e: UnicodeEscapeError) -> Self {
+        ParseErrorKind::Literal(LiteralError::UnicodeEscape(e))
+    }
+}
+impl FromExternalError<Input<'_>, NumberError> for ParseErrorKind {
+    fn from_external_error(_input: &Input<'_>, e: NumberError) -> Self {
+        ParseErrorKind::Number(e)
+    }
+}
+impl FromExternalError<Input<'_>, IdentError> for ParseErrorKind {
+    fn from_external_error(_input: &Input<'_>, e: IdentError) -> Self {
+        ParseErrorKind::Ident(e)
+    }
+}
+impl FromExternalError<Input<'_>, ExprError> for ParseErrorKind {
+    fn from_external_error(_input: &Input<'_>, e: ExprError) -> Self {
+        ParseErrorKind::Expr(e)
+    }
+}
+impl FromExternalError<Input<'_>, CommandError> for ParseErrorKind {
+    fn from_external_error(_input: &Input<'_>, e: CommandError) -> Self {
+        ParseErrorKind::Command(e)
     }
 }
 
