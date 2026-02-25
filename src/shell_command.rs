@@ -37,7 +37,7 @@ pub fn find_shell_command(name: &str) -> Option<ShellCommandKind> {
         _ => None?,
     })
 }
-pub fn run(command: ShellCommandKind, args: &[Value]) -> Result<i32> {
+pub fn run(command: &ShellCommandKind, args: &[Value]) -> Result<i32> {
     use ShellCommandKind::*;
     let result = match command {
         Cd => cd(args),

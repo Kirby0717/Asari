@@ -35,11 +35,14 @@ fn mix_span(a: &Span, b: &Span) -> Span {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Spanned<T> {
-    pub inner: T,
+    inner: T,
     #[serde(skip)]
-    pub span: Span,
+    span: Span,
 }
 impl<T> Spanned<T> {
+    pub fn into_inner(self) -> T {
+        self.inner
+    }
     pub fn _map<U, F: FnOnce(T) -> U>(self, f: F) -> Spanned<U> {
         Spanned {
             inner: f(self.inner),

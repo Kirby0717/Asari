@@ -1,7 +1,6 @@
 use crate::exec::Error as ExecError;
 use crate::parse::{
-    CommandPart, Expr, ExprInfix, ExprPostfix, ExprPrefix, Primary, Spanned,
-    SpecialVar,
+    CommandPart, Expr, ExprInfix, ExprPostfix, ExprPrefix, Primary, SpecialVar,
 };
 use crate::value::*;
 
@@ -48,17 +47,17 @@ impl Default for Context {
 }
 
 pub fn eval_command_part(
-    command_part: &Spanned<CommandPart>,
+    command_part: &CommandPart,
     env: &mut Context,
 ) -> Result<Value> {
-    Ok(match &command_part.inner {
-        CommandPart::Unquoted(string) => tilde_expand(&string.inner)?.into(),
+    Ok(match command_part {
+        CommandPart::Unquoted(string) => tilde_expand(string)?.into(),
         CommandPart::SimpleExpr(expr) => eval_expr(expr, env)?,
     })
 }
-pub fn eval_expr(expr: &Spanned<Expr>, env: &mut Context) -> Result<Value> {
+pub fn eval_expr(expr: &Expr, env: &mut Context) -> Result<Value> {
     use Expr::*;
-    Ok(match &expr.inner {
+    Ok(match expr {
         Primary(primary) => eval_primary(primary, env)?,
         Prefix(expr, prefix) => eval_prefix(expr, prefix, env)?,
         Infix(expr1, expr2, infix) => eval_infix(expr1, expr2, infix, env)?,
@@ -133,7 +132,7 @@ macro_rules! checked_infix {
 }
 
 fn eval_prefix(
-    expr: &Spanned<Expr>,
+    expr: &Expr,
     prefix: &ExprPrefix,
     env: &mut Context,
 ) -> Result<Value> {
@@ -153,8 +152,8 @@ fn eval_prefix(
     }
 }
 fn eval_infix(
-    expr1: &Spanned<Expr>,
-    expr2: &Spanned<Expr>,
+    expr1: &Expr,
+    expr2: &Expr,
     infix: &ExprInfix,
     env: &mut Context,
 ) -> Result<Value> {
@@ -197,7 +196,7 @@ fn eval_infix(
     }
 }
 fn eval_postfix(
-    expr: &Spanned<Expr>,
+    expr: &Expr,
     postfix: &ExprPostfix,
     env: &mut Context,
 ) -> Result<Value> {
@@ -237,16 +236,13 @@ fn eval_postfix(
             };
             index.and_then(|index| v.get(index).cloned()).into()
         }
-        (v, Cast(t)) => v.cast(&t.inner)?,
+        (v, Cast(t)) => v.cast(&t)?,
         _ => return Err(Error::InvalidType.into()),
     })
 }
-fn eval_primary(
-    primary: &Spanned<Primary>,
-    env: &mut Context,
-) -> Result<Value> {
+fn eval_primary(primary: &Primary, env: &mut Context) -> Result<Value> {
     use Primary::*;
-    Ok(match &primary.inner {
+    Ok(match primary {
         String(str) => str.clone().into(),
         PathString(str) => eval_path_string(str, env)?,
         SpecialVar(special_var) => eval_special_var(special_var, env)?,

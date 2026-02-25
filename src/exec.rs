@@ -1,7 +1,7 @@
 use crate::eval::{Context, Error as EvalError, eval_command_part, eval_expr};
 use crate::parse::{
     Command, CommandLine, CommandPart, InputRedirect, MergeRedirect,
-    OutputMode, OutputRedirect, Pipe, Pipeline, Redirect, Spanned, Statement,
+    OutputMode, OutputRedirect, Pipe, Pipeline, Redirect, Statement,
 };
 use crate::shell_command::Error as BuiltinError;
 use crate::value::Value;
@@ -60,39 +60,32 @@ impl Shell {
     pub fn new() -> Self {
         Self::default()
     }
-    pub fn execute(
-        &mut self,
-        shell_command: &Spanned<CommandLine>,
-    ) -> Result<()> {
+    pub fn execute(&mut self, shell_command: &CommandLine) -> Result<()> {
         execute_command_line(shell_command, &mut self.context)
     }
 }
 
 pub fn execute_command_line(
-    command_line: &Spanned<CommandLine>,
+    command_line: &CommandLine,
     env: &mut Context,
 ) -> Result<()> {
-    for statement in &command_line.inner.statements {
+    for statement in &command_line.statements {
         execute_statement(statement, env)?;
     }
     Ok(())
 }
 
-fn execute_statement(
-    statement: &Spanned<Statement>,
-    env: &mut Context,
-) -> Result<()> {
+fn execute_statement(statement: &Statement, env: &mut Context) -> Result<()> {
     use Statement::*;
-    match &statement.inner {
+    match statement {
         ShellCommand(shell_command) => {
-            let command = shell_command.inner.kind.inner;
+            let command = shell_command.kind.clone();
             let args = shell_command
-                .inner
                 .args
                 .iter()
                 .map(|arg| eval_command_part(arg, env))
                 .collect::<Result<Vec<_>>>()?;
-            env.last_status = crate::shell_command::run(command, &args)?;
+            env.last_status = crate::shell_command::run(&command, &args)?;
         }
         Pipeline(pipeline) => {
             // Exitエラーは伝播させる
@@ -105,12 +98,12 @@ fn execute_statement(
             }
         }
         EnvAssign(env_assign) => {
-            let name = &env_assign.inner.name.inner;
-            let value = eval_expr(&env_assign.inner.value, env)?;
+            let name = &env_assign.name;
+            let value = eval_expr(&env_assign.value, env)?;
             match value {
                 Value::String(value) => {
                     // シングルスレッドでのみ環境変数を書き換えているので安全
-                    unsafe { std::env::set_var(name, value) };
+                    unsafe { std::env::set_var(name.as_ref(), value) };
                 }
                 Value::Option(Some(value))
                     if matches!(*value, Value::String(_)) =>
@@ -120,11 +113,11 @@ fn execute_statement(
                         unreachable!()
                     };
                     // シングルスレッドでのみ環境変数を書き換えているので安全
-                    unsafe { std::env::set_var(name, value) };
+                    unsafe { std::env::set_var(name.as_ref(), value) };
                 }
                 Value::Option(None) => {
                     // シングルスレッドでのみ環境変数を書き換えているので安全
-                    unsafe { std::env::remove_var(name) };
+                    unsafe { std::env::remove_var(name.as_ref()) };
                 }
                 _ => {
                     return Err(Error::EnvAssignNotStringOrNone);
@@ -135,10 +128,7 @@ fn execute_statement(
     Ok(())
 }
 
-fn execute_pipeline(
-    pipeline: &Spanned<Pipeline>,
-    env: &mut Context,
-) -> Result<()> {
+fn execute_pipeline(pipeline: &Pipeline, env: &mut Context) -> Result<()> {
     // コマンドの整理
     let resolved_commands = resolve_pipeline(pipeline, env)?;
 
@@ -207,9 +197,9 @@ struct ResolvedCommand {
     stderr: StdioOutputConfig,
 }
 impl ResolvedCommand {
-    fn new(command: &Spanned<Command>, env: &mut Context) -> Result<Self> {
+    fn new(command: &Command, env: &mut Context) -> Result<Self> {
         // コマンド名の評価
-        let name = eval_command_part(&command.inner.name, env)?;
+        let name = eval_command_part(&command.name, env)?;
         let Value::String(name) = name
         else {
             return Err(Error::InvalidCommandType);
@@ -224,22 +214,20 @@ impl ResolvedCommand {
 
         // 一時環境変数の評価
         let envs: Vec<_> = command
-            .inner
             .temp_envs
             .iter()
             .map(|temp_env| {
-                let (env_var, env_val) = &temp_env.inner;
+                let (env_var, env_val) = temp_env.as_ref();
                 let Value::String(env_val) = eval_expr(env_val, env)?
                 else {
                     return Err(Error::TempEnvAssignNotString);
                 };
-                Ok((env_var.inner.clone(), env_val))
+                Ok((env_var.as_ref().clone(), env_val))
             })
             .collect::<Result<Vec<_>>>()?;
 
         // 引数の評価
         let args: Vec<_> = command
-            .inner
             .args
             .iter()
             .map(|arg| eval_command_part(arg, env))
@@ -311,17 +299,15 @@ impl StdioOutputConfig {
 }
 
 fn resolve_pipeline(
-    pipeline: &Spanned<Pipeline>,
+    pipeline: &Pipeline,
     env: &mut Context,
 ) -> Result<Vec<ResolvedCommand>> {
-    let Pipeline { first, rest } = &pipeline.inner;
+    let Pipeline { first, rest } = &pipeline;
     let mut commands_with_redirects = vec![];
 
     // 初期設定
-    commands_with_redirects.push((
-        ResolvedCommand::new(first, env)?,
-        first.inner.redirects.clone(),
-    ));
+    commands_with_redirects
+        .push((ResolvedCommand::new(first, env)?, first.redirects.clone()));
     for (pipe, command) in rest {
         // パイプに対する左右のコマンドを取得
         let (left, _) = commands_with_redirects.last_mut().unwrap();
@@ -333,13 +319,13 @@ fn resolve_pipeline(
         let writer = StdioOutputConfig::PipeWriter(writer);
 
         // 種類ごとに設定
-        if matches!(pipe.inner, Pipe::StdoutStderr) {
+        if matches!(pipe.as_ref(), Pipe::StdoutStderr) {
             left.stderr = writer.try_clone()?;
         }
         left.stdout = writer;
         right.stdin = reader;
 
-        commands_with_redirects.push((right, command.inner.redirects.clone()));
+        commands_with_redirects.push((right, command.redirects.clone()));
     }
 
     // リダイレクトの反映
@@ -353,11 +339,11 @@ fn resolve_pipeline(
 }
 fn apply_redirect(
     resolved_command: &mut ResolvedCommand,
-    redirects: Vec<Spanned<Redirect>>,
+    redirects: Vec<crate::parse::Spanned<Redirect>>,
     env: &mut Context,
 ) -> Result<()> {
     for redirect in redirects {
-        match &redirect.inner {
+        match redirect.as_ref() {
             Redirect::Input(input_redirect) => {
                 apply_input_redirect(resolved_command, input_redirect, env)?;
             }
@@ -404,7 +390,8 @@ fn apply_input_redirect(
         }
         // 文字列をそのまま渡す
         HereDoc(s) => {
-            resolved_command.stdin = StdioInputConfig::String(s.inner.clone());
+            resolved_command.stdin =
+                StdioInputConfig::String(s.as_ref().clone());
         }
         // 文字列を評価してそのまま渡す
         HereString(value) => {
@@ -423,7 +410,7 @@ fn apply_output_redirect(
     resolved_command: &mut ResolvedCommand,
     output_redirect: &OutputRedirect,
     output_mode: &OutputMode,
-    file_expression: &Spanned<CommandPart>,
+    file_expression: &CommandPart,
     env: &mut Context,
 ) -> Result<()> {
     use OutputMode::*;
