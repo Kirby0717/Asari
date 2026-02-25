@@ -1,11 +1,7 @@
 mod check;
 mod cli;
-mod eval;
-mod exec;
 mod parse;
-mod payload;
-mod shell_command;
-mod value;
+mod runtime;
 
 use cli::*;
 
@@ -27,15 +23,18 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn run_subst_mode<P: AsRef<Path>>(payload_path: P) -> anyhow::Result<()> {
-    let mut payload = payload::read_payload(&payload_path)?;
-    exec::execute_command_line(&payload.command, &mut payload.context)?;
+    let mut payload = runtime::payload::read_payload(&payload_path)?;
+    runtime::exec::execute_command_line(
+        &payload.command,
+        &mut payload.context,
+    )?;
     Ok(())
 }
 
 fn run_shell_mode() -> anyhow::Result<()> {
     welcome();
 
-    let mut shell = exec::Shell::new();
+    let mut shell = runtime::exec::Shell::new();
 
     loop {
         continuation(&std::env::current_dir()?);
@@ -68,7 +67,9 @@ fn run_shell_mode() -> anyhow::Result<()> {
 
                 // 実行
                 match shell.execute(&command) {
-                    Err(exec::Error::Exit(code)) => std::process::exit(code),
+                    Err(runtime::exec::Error::Exit(code)) => {
+                        std::process::exit(code)
+                    }
                     Err(e) => eprintln!("コマンドの実行に失敗しました : {e}"),
                     _ => {}
                 }

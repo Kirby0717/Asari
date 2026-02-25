@@ -5,8 +5,7 @@ pub mod literal;
 pub mod simple_expr;
 pub mod tools;
 
-use crate::shell_command::ShellCommandKind;
-use crate::value::Type;
+use crate::runtime::shell_command::ShellCommandKind;
 use command::command_line;
 use error::*;
 use expr::expr;
@@ -237,11 +236,11 @@ impl Spanned<ExprInfix> {
 type ExprNode = Box<Spanned<Expr>>;
 #[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum ExprPostfix {
-    Unwrap,              // !
-    IsSome,              // ?
-    Length,              // @
-    Index(ExprNode),     // [expr]
-    Cast(Spanned<Type>), // as type
+    Unwrap,                 // !
+    IsSome,                 // ?
+    Length,                 // @
+    Index(ExprNode),        // [expr]
+    Cast(Spanned<AstType>), // as type
 }
 impl ExprPostfix {
     fn power(&self) -> i32 {
@@ -286,6 +285,12 @@ pub enum Primary {
     Float(f64),                              // 12.3
     Option(Option<Box<Spanned<Expr>>>),      // none, some(expr)
     Unit,                                    // ()
+}
+#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub enum AstType {
+    Unknown,                        // _
+    Normal(String),                 // int float bool string ...
+    Generics(String, Box<AstType>), // array option ...
 }
 #[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum SpecialVar {

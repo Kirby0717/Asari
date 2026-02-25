@@ -1,8 +1,9 @@
-use crate::exec::Error as ExecError;
+use super::exec::Error as ExecError;
+use super::value::*;
 use crate::parse::{
-    CommandPart, Expr, ExprInfix, ExprPostfix, ExprPrefix, Primary, SpecialVar,
+    AstType, CommandPart, Expr, ExprInfix, ExprPostfix, ExprPrefix, Primary,
+    SpecialVar,
 };
-use crate::value::*;
 
 use std::{
     collections::HashMap,
@@ -236,8 +237,27 @@ fn eval_postfix(
             };
             index.and_then(|index| v.get(index).cloned()).into()
         }
-        (v, Cast(t)) => v.cast(&t)?,
+        (v, Cast(t)) => v.cast(&eval_ast_type(t, env)?)?,
         _ => return Err(Error::InvalidType.into()),
+    })
+}
+fn eval_ast_type(ast_type: &AstType, env: &mut Context) -> Result<Type> {
+    use AstType::*;
+    Ok(match ast_type {
+        Unknown => Type::Unknown,
+        Normal(name) => match name.as_str() {
+            "string" => Type::String,
+            "int" => Type::Int,
+            "float" => Type::Float,
+            "bool" => Type::Bool,
+            "unit" => Type::Unit,
+            _ => todo!("型エラー"),
+        },
+        Generics(name, t) => match name.as_str() {
+            "array" => Type::Array(Box::new(eval_ast_type(t, env)?)),
+            "option" => Type::Option(Box::new(eval_ast_type(t, env)?)),
+            _ => todo!("型エラー"),
+        },
     })
 }
 fn eval_primary(primary: &Primary, env: &mut Context) -> Result<Value> {
@@ -268,15 +288,17 @@ fn eval_primary(primary: &Primary, env: &mut Context) -> Result<Value> {
             .into(),
         Unit => ().into(),
         CommandSubst(shell_command) => {
+            use super::exec::status_into_i32;
+            use super::payload::{SubstPayload, write_payload};
             use std::process::Stdio;
+            // TODO:実行部分をexeに関数として書く
 
             // 実行すべきコマンドとシェル変数などを含んだ環境を一時ファイルへ保存
-            let path =
-                crate::payload::write_payload(&crate::payload::SubstPayload {
-                    command: shell_command.clone().into_inner(),
-                    context: env.clone(),
-                })
-                .map_err(Error::SubstError)?;
+            let path = write_payload(&SubstPayload {
+                command: shell_command.clone().into_inner(),
+                context: env.clone(),
+            })
+            .map_err(Error::SubstError)?;
 
             // 自分自身をsubstモードで起動
             let output = std::process::Command::new(
@@ -290,7 +312,7 @@ fn eval_primary(primary: &Primary, env: &mut Context) -> Result<Value> {
             .output()
             .map_err(Error::SubstError)?;
 
-            env.last_status = crate::exec::status_into_i32(output.status);
+            env.last_status = status_into_i32(output.status);
             std::string::String::from_utf8(output.stdout)
                 .map_err(|_| ExecError::CommandOutIsNotUtf8)?
                 .trim_end_matches(['\r', '\n'])

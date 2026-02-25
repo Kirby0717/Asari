@@ -14,6 +14,7 @@ pub enum ParseErrorKind {
     Number(NumberError),
     Ident(IdentError),
     Expr(ExprError),
+    Type(TypeError),
     Command(CommandError),
     #[default]
     Other,
@@ -53,9 +54,13 @@ pub enum ExprError {
     UnclosedBracket,
     UnclosedSome,
     UnclosedCommandSubst,
-    UnknownType,
-    UnclosedTypeParam,
     NoRhs,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TypeError {
+    UnclosedTypeParam,
+    InvalidTypeName(String),
+    NoType,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CommandError {
@@ -74,6 +79,7 @@ impl Display for ParseErrorKind {
             Number(e) => e.fmt(f),
             Ident(e) => e.fmt(f),
             Expr(e) => e.fmt(f),
+            Type(e) => e.fmt(f),
             Command(e) => e.fmt(f),
             Other => write!(f, "不明なエラーです"),
         }
@@ -148,9 +154,17 @@ impl Display for ExprError {
             UnclosedBracket => write!(f, "[]が閉じられていません"),
             UnclosedSome => write!(f, "some()が閉じられていません"),
             UnclosedCommandSubst => write!(f, "$()が閉じられていません"),
-            UnknownType => write!(f, "不明な型です"),
-            UnclosedTypeParam => write!(f, "type<>が閉じられていません"),
             NoRhs => write!(f, "演算子の右辺がありません"),
+        }
+    }
+}
+impl Display for TypeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use TypeError::*;
+        match self {
+            UnclosedTypeParam => write!(f, "type<>が閉じられていません"),
+            InvalidTypeName(name) => write!(f, "不正な型名\"{name}\"です"),
+            NoType => write!(f, "型がありません"),
         }
     }
 }
@@ -196,6 +210,11 @@ impl FromExternalError<Input<'_>, IdentError> for ParseErrorKind {
 impl FromExternalError<Input<'_>, ExprError> for ParseErrorKind {
     fn from_external_error(_input: &Input<'_>, e: ExprError) -> Self {
         ParseErrorKind::Expr(e)
+    }
+}
+impl FromExternalError<Input<'_>, TypeError> for ParseErrorKind {
+    fn from_external_error(_input: &Input<'_>, e: TypeError) -> Self {
+        ParseErrorKind::Type(e)
     }
 }
 impl FromExternalError<Input<'_>, CommandError> for ParseErrorKind {

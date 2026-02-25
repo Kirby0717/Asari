@@ -156,17 +156,47 @@ pub fn expr_postfix(input: &mut Input) -> ModalResult<ExprPostfix> {
             '@' => empty.value(Length),
             '[' => delimited(space0, expr.spanned(), (space0, ']'))
                 .map(|index| Index(Box::new(index))),
-            'a' => preceded(('s', space0), expr_type.spanned())
+            'a' => preceded(('s', space0), ast_type.spanned())
                 .map(Cast),
             _ => fail,
         },
     )
     .parse_next(input)
 }
-pub fn expr_type(input: &mut Input) -> ModalResult<Type> {
-    use Type::*;
-    let mut type_name = take_while(1.., 'a'..='z');
-    trace(
+pub fn ast_type(input: &mut Input) -> ModalResult<AstType> {
+    use AstType::*;
+    trace("expr_type", |input: &mut Input| {
+        if opt('_').parse_next(input)?.is_some() {
+            return Ok(Unknown);
+        }
+        let name = ident
+            .try_map_with_span(|name| {
+                if name.chars().all(|c| c.is_ascii_lowercase()) {
+                    Ok(name)
+                }
+                else {
+                    Err(TypeError::InvalidTypeName(name))
+                }
+            })
+            .cut()
+            .parse_next(input)?;
+        if opt((space0, '<')).parse_next(input)?.is_some() {
+            let generics = preceded(space0, ast_type)
+                .map_err_with_span(|_| TypeError::NoType)
+                .cut()
+                .parse_next(input)?;
+            let _ = (space0, '>')
+                .map_err_with_span(|_| TypeError::UnclosedTypeParam)
+                .cut()
+                .parse_next(input)?;
+            Ok(Generics(name, Box::new(generics)))
+        }
+        else {
+            Ok(Normal(name))
+        }
+    })
+    .parse_next(input)
+    /*trace(
         "expr_type",
         dispatch! {type_name;
             "string" => empty.value(String),
@@ -181,7 +211,7 @@ pub fn expr_type(input: &mut Input) -> ModalResult<Type> {
             _ => fail,
         },
     )
-    .parse_next(input)
+    .parse_next(input)*/
 }
 pub fn expr(input: &mut Input) -> ModalResult<Expr> {
     trace("expr", |input: &mut Input| {

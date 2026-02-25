@@ -157,10 +157,11 @@ where
         //let start = input.checkpoint();
         let begin = input.current_token_start();
         let output = self.parser.parse_next(input)?;
+        let end = input.previous_token_end();
         (self.map)(output).map_err(|err| {
             //input.reset(&start);
             ErrMode::Backtrack(ParseError {
-                span: begin..begin + 1,
+                span: begin..end,
                 kind: ParseErrorKind::from_external_error(input, err),
             })
         })

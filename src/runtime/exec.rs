@@ -1,10 +1,10 @@
-use crate::eval::{Context, Error as EvalError, eval_command_part, eval_expr};
+use super::eval::{Context, Error as EvalError, eval_command_part, eval_expr};
+use super::shell_command::Error as BuiltinError;
+use super::value::Value;
 use crate::parse::{
     Command, CommandLine, CommandPart, InputRedirect, MergeRedirect,
     OutputMode, OutputRedirect, Pipe, Pipeline, Redirect, Statement,
 };
-use crate::shell_command::Error as BuiltinError;
-use crate::value::Value;
 
 use std::io::Write;
 use std::process::Stdio;
@@ -85,7 +85,7 @@ fn execute_statement(statement: &Statement, env: &mut Context) -> Result<()> {
                 .iter()
                 .map(|arg| eval_command_part(arg, env))
                 .collect::<Result<Vec<_>>>()?;
-            env.last_status = crate::shell_command::run(&command, &args)?;
+            env.last_status = super::shell_command::run(&command, &args)?;
         }
         Pipeline(pipeline) => {
             // Exitエラーは伝播させる

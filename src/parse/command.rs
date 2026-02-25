@@ -63,7 +63,9 @@ pub fn shell_command(input: &mut Input) -> ModalResult<ShellCommand> {
 }
 pub fn shell_command_kind(input: &mut Input) -> ModalResult<ShellCommandKind> {
     unquoted_string
-        .verify_map(|name| crate::shell_command::find_shell_command(&name))
+        .verify_map(|name| {
+            crate::runtime::shell_command::find_shell_command(&name)
+        })
         .parse_next(input)
 }
 pub fn env_assign(input: &mut Input) -> ModalResult<EnvAssign> {
