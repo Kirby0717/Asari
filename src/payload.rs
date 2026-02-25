@@ -1,5 +1,5 @@
 use crate::eval::Context;
-use crate::parse::{CommandLine, Spanned};
+use crate::parse::CommandLine;
 
 use std::path::{Path, PathBuf};
 
@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
 pub struct SubstPayload {
-    pub command: Spanned<CommandLine>,
+    pub command: CommandLine,
     pub context: Context,
 }
 

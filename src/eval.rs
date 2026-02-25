@@ -273,7 +273,7 @@ fn eval_primary(primary: &Primary, env: &mut Context) -> Result<Value> {
             // 実行すべきコマンドとシェル変数などを含んだ環境を一時ファイルへ保存
             let path =
                 crate::payload::write_payload(&crate::payload::SubstPayload {
-                    command: shell_command.as_ref().clone(),
+                    command: shell_command.clone().into_inner(),
                     context: env.clone(),
                 })
                 .map_err(Error::SubstError)?;
