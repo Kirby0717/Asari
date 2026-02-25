@@ -52,6 +52,12 @@ impl<T> AsRef<T> for Spanned<T> {
         &self.inner
     }
 }
+impl<T> std::ops::Deref for Spanned<T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
 impl<T: PartialEq> PartialEq for Spanned<T> {
     fn eq(&self, other: &Self) -> bool {
         self.inner.eq(&other.inner)
