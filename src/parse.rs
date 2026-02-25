@@ -287,12 +287,11 @@ pub enum SpecialVar {
 }
 
 type ModalResult<O> = winnow::ModalResult<O, ParseError>;
-type SpannedResult<O> = ModalResult<Spanned<O>>;
 
 pub fn parse_shell_command(
     input: &str,
 ) -> Result<
-    Spanned<CommandLine>,
+    CommandLine,
     winnow::error::ParseError<LocatingSlice<&str>, ParseError>,
 > {
     delimited(space0, command_line, space0).parse(Input::new(input))
