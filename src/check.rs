@@ -1,3 +1,4 @@
+#![allow(unused)]
 use crate::parse::{
     Command, CommandLine, EnvAssign, MergeRedirect, OutputRedirect, Pipe,
     Pipeline, Redirect, ShellCommand, Statement,

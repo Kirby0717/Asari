@@ -1,3 +1,4 @@
+#![allow(unused)]
 use super::{Input, Span};
 
 use std::fmt::Display;

@@ -119,8 +119,6 @@ pub enum Type {
     Unknown,
 }
 
-#[derive(Debug)]
-pub struct CastError;
 macro_rules! impl_from_value {
     ($type_name:ident $rust_type:ident : $($t:ty),*) => {
         $(impl From<$t> for Value {
@@ -130,14 +128,6 @@ macro_rules! impl_from_value {
     (direct : $($type_name:ident $rust_type:ident),*) => {
         $(impl From<$rust_type> for Value {
             fn from(v: $rust_type) -> Self { Value::$type_name(v) }
-        })*
-    };
-    (try $type_name:ident $rust_type:ident : $($t:ty),*) => {
-        $(impl TryFrom<$t> for Value {
-            type Error = CastError;
-            fn try_from(v: $t) -> Result<Self, Self::Error> {
-                $rust_type::try_from(v).map(Value::$type_name).map_err(|_| CastError)
-            }
         })*
     };
 }
