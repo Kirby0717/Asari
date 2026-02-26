@@ -1,48 +1,39 @@
-use super::exec::Error as ExecError;
-use super::value::*;
+use super::{Context, Result, Type, Value};
 use crate::parse::{
     AstType, CommandPart, Expr, ExprInfix, ExprPostfix, ExprPrefix, Primary,
     SpecialVar,
 };
 
-use std::{
-    collections::HashMap,
-    path::{Component, Path, PathBuf},
-    string::String,
-};
+use std::fmt::Display;
+use std::path::{Component, Path, PathBuf};
+use std::string::String;
 
-use serde::{Deserialize, Serialize};
-
-type Result<T> = ::std::result::Result<T, ExecError>;
 #[derive(Debug)]
 pub enum Error {
-    InvalidType,
+    TypeMismatch,
     OverFlow,
     UnwrapNone,
-    UnknownShellVar,
+    UnknownShellVar(String),
+    UnknownType(String),
     FailCast,
     NoHomeDir,
     InvalidUtf8Path,
     InvalidGlobPattern,
-    SubstError(std::io::Error),
 }
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Context {
-    pub shell_name: String,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub shell_vars: HashMap<String, Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_pid: Option<u32>,
-    pub last_status: i32,
-}
-impl Default for Context {
-    fn default() -> Self {
-        Context {
-            shell_name: "asari".to_string(),
-            shell_vars: Default::default(),
-            last_pid: None,
-            last_status: 0,
+impl std::error::Error for Error {}
+impl Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use Error::*;
+        match self {
+            TypeMismatch => write!(f, "型が違います"),
+            OverFlow => write!(f, "整数がオーバーフローしました"),
+            UnwrapNone => write!(f, "noneをunwrapしました"),
+            UnknownShellVar(s) => write!(f, "不明なシェル変数@{s}です"),
+            UnknownType(name) => write!(f, "不明な型名{name}です"),
+            FailCast => write!(f, "型変換に失敗しました"),
+            NoHomeDir => write!(f, "ホームディレクトリの取得に失敗しました"),
+            InvalidUtf8Path => write!(f, "パスがUTF-8ではありません"),
+            InvalidGlobPattern => write!(f, "不正なglobパターンです"),
         }
     }
 }
@@ -149,7 +140,7 @@ fn eval_prefix(
             [ Int(a) ] { Neg checked_neg }
         }
         @extra:
-        _ => return Err(Error::InvalidType.into()),
+        _ => return Err(Error::TypeMismatch.into()),
     }
 }
 fn eval_infix(
@@ -193,7 +184,7 @@ fn eval_infix(
         @extra:
         (String(a), String(b), Add) => (a + &b).into(),
         (Option(a), b, UnwrapOr) => *a.unwrap_or(Box::new(b)),
-        _ => return Err(Error::InvalidType.into()),
+        _ => return Err(Error::TypeMismatch.into()),
     }
 }
 fn eval_postfix(
@@ -204,6 +195,9 @@ fn eval_postfix(
     let value = eval_expr(expr, env)?;
     use ExprPostfix::*;
     use Value::*;
+    fn usize_into_value(i: usize) -> Result<Value> {
+        Ok(Value::Int(i64::try_from(i).map_err(|_| Error::OverFlow)?))
+    }
     Ok(match (value, postfix) {
         (Option(a), Unwrap) => {
             if let Some(a) = a {
@@ -214,13 +208,13 @@ fn eval_postfix(
             }
         }
         (Option(a), IsSome) => a.is_some().into(),
-        (String(s), Length) => s.chars().count().try_into()?,
-        (Array(v), Length) => v.len().try_into()?,
+        (String(s), Length) => usize_into_value(s.chars().count())?,
+        (Array(v), Length) => usize_into_value(v.len())?,
         (Array(v), Index(index)) => {
             let index = eval_expr(index, env)?;
             let Int(index) = index
             else {
-                return Err(Error::InvalidType.into());
+                return Err(Error::TypeMismatch.into());
             };
             let index = if index >= 0 {
                 // 正
@@ -237,27 +231,8 @@ fn eval_postfix(
             };
             index.and_then(|index| v.get(index).cloned()).into()
         }
-        (v, Cast(t)) => v.cast(&eval_ast_type(t, env)?)?,
-        _ => return Err(Error::InvalidType.into()),
-    })
-}
-fn eval_ast_type(ast_type: &AstType, env: &mut Context) -> Result<Type> {
-    use AstType::*;
-    Ok(match ast_type {
-        Unknown => Type::Unknown,
-        Normal(name) => match name.as_str() {
-            "string" => Type::String,
-            "int" => Type::Int,
-            "float" => Type::Float,
-            "bool" => Type::Bool,
-            "unit" => Type::Unit,
-            _ => todo!("型エラー"),
-        },
-        Generics(name, t) => match name.as_str() {
-            "array" => Type::Array(Box::new(eval_ast_type(t, env)?)),
-            "option" => Type::Option(Box::new(eval_ast_type(t, env)?)),
-            _ => todo!("型エラー"),
-        },
+        (v, Cast(t)) => eval_cast(&v, &eval_ast_type(t)?)?,
+        _ => return Err(Error::TypeMismatch.into()),
     })
 }
 fn eval_primary(primary: &Primary, env: &mut Context) -> Result<Value> {
@@ -270,7 +245,7 @@ fn eval_primary(primary: &Primary, env: &mut Context) -> Result<Value> {
         ShellVar(shell_var) => env
             .shell_vars
             .get(shell_var)
-            .ok_or(Error::UnknownShellVar)?
+            .ok_or(Error::UnknownShellVar(shell_var.to_string()))?
             .clone(),
         Paren(expr) => eval_expr(expr, env)?,
         Array(array) => array
@@ -278,9 +253,9 @@ fn eval_primary(primary: &Primary, env: &mut Context) -> Result<Value> {
             .map(|expr| eval_expr(expr, env))
             .collect::<Result<Vec<_>>>()?
             .into(),
-        Bool(bool) => bool.into(),
-        Int(int) => int.into(),
-        Float(float) => float.into(),
+        Bool(bool) => (*bool).into(),
+        Int(int) => (*int).into(),
+        Float(float) => (*float).into(),
         Option(option) => option
             .as_ref()
             .map(|expr| eval_expr(expr, env))
@@ -288,36 +263,13 @@ fn eval_primary(primary: &Primary, env: &mut Context) -> Result<Value> {
             .into(),
         Unit => ().into(),
         CommandSubst(shell_command) => {
-            use super::exec::status_into_i32;
-            use super::payload::{SubstPayload, write_payload};
-            use std::process::Stdio;
-            // TODO:実行部分をexeに関数として書く
+            use super::subst::{SubstPayload, execute_substitution};
 
-            // 実行すべきコマンドとシェル変数などを含んだ環境を一時ファイルへ保存
-            let path = write_payload(&SubstPayload {
+            let payload = SubstPayload {
                 command: shell_command.clone().into_inner(),
                 context: env.clone(),
-            })
-            .map_err(Error::SubstError)?;
-
-            // 自分自身をsubstモードで起動
-            let output = std::process::Command::new(
-                std::env::current_exe().map_err(Error::SubstError)?,
-            )
-            .arg("subst")
-            .arg(&path)
-            .stdin(Stdio::inherit())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .output()
-            .map_err(Error::SubstError)?;
-
-            env.last_status = status_into_i32(output.status);
-            std::string::String::from_utf8(output.stdout)
-                .map_err(|_| ExecError::CommandOutIsNotUtf8)?
-                .trim_end_matches(['\r', '\n'])
-                .to_string()
-                .into()
+            };
+            execute_substitution(&payload, env)?.into()
         }
     })
 }
@@ -331,6 +283,69 @@ fn eval_special_var(
         Pid => std::process::id().into(),
         BackgroundPid => env.last_pid.into(),
         ShellName => env.shell_name.clone().into(),
+    })
+}
+fn eval_ast_type(ast_type: &AstType) -> Result<Type> {
+    use AstType::*;
+    Ok(match ast_type {
+        Unknown => Type::Unknown,
+        Normal(name) => match name.as_str() {
+            "string" => Type::String,
+            "int" => Type::Int,
+            "float" => Type::Float,
+            "bool" => Type::Bool,
+            "unit" => Type::Unit,
+            _ => return Err(Error::UnknownType(name.clone()).into()),
+        },
+        Generics(name, t) => match name.as_str() {
+            "array" => Type::Array(Box::new(eval_ast_type(t)?)),
+            "option" => Type::Option(Box::new(eval_ast_type(t)?)),
+            _ => return Err(Error::UnknownType(name.clone()).into()),
+        },
+    })
+}
+fn eval_cast(value: &Value, r#type: &Type) -> Result<Value> {
+    use Error::FailCast;
+    use Value::*;
+    Ok(match (value, r#type) {
+        (String(s), Type::String) => s.clone().into(),
+        (String(s), Type::Int) => {
+            s.parse::<i64>().map_err(|_| FailCast)?.into()
+        }
+        (String(s), Type::Float) => {
+            s.parse::<f64>().map_err(|_| FailCast)?.into()
+        }
+        (String(s), Type::Bool) => match s.as_str() {
+            "true" => true,
+            "false" => false,
+            _ => return Err(FailCast.into()),
+        }
+        .into(),
+        (Int(a), Type::String) => a.to_string().into(),
+        (Int(a), Type::Int) => (*a).into(),
+        (Int(a), Type::Float) => ((*a) as f64).into(),
+        (Float(a), Type::String) => a.to_string().into(),
+        (Float(a), Type::Int) => {
+            if a.is_finite() {
+                ((*a) as i64).into()
+            }
+            else {
+                return Err(FailCast.into());
+            }
+        }
+        (Float(a), Type::Float) => (*a).into(),
+        (Bool(a), Type::String) => a.to_string().into(),
+        (Bool(a), Type::Bool) => (*a).into(),
+        (Array(v), Type::Array(t)) => v
+            .iter()
+            .map(|v| eval_cast(v, t))
+            .collect::<Result<Vec<_>>>()?
+            .into(),
+        (Option(o), Type::Option(t)) => {
+            o.as_ref().map(|v| eval_cast(v, t)).transpose()?.into()
+        }
+        (Unit, Type::Unit) => ().into(),
+        _ => return Err(FailCast.into()),
     })
 }
 fn eval_path_string(path_string: &str, _env: &mut Context) -> Result<Value> {

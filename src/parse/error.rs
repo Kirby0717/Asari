@@ -71,6 +71,7 @@ pub enum CommandError {
     NoValue,
     NoAssignEquals(char),
 }
+impl std::error::Error for ParseErrorKind {}
 impl Display for ParseErrorKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use ParseErrorKind::*;
@@ -85,6 +86,7 @@ impl Display for ParseErrorKind {
         }
     }
 }
+impl std::error::Error for LiteralError {}
 impl Display for LiteralError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use LiteralError::*;
@@ -100,6 +102,7 @@ impl Display for LiteralError {
         }
     }
 }
+impl std::error::Error for UnicodeEscapeError {}
 impl Display for UnicodeEscapeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use UnicodeEscapeError::*;
@@ -111,6 +114,7 @@ impl Display for UnicodeEscapeError {
         }
     }
 }
+impl std::error::Error for NumberError {}
 impl Display for NumberError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use NumberError::*;
@@ -137,6 +141,7 @@ fn fmt_int_error(
         _ => write!(f, "{radix}の解析に失敗しました"),
     }
 }
+impl std::error::Error for IdentError {}
 impl Display for IdentError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use IdentError::*;
@@ -146,6 +151,7 @@ impl Display for IdentError {
         }
     }
 }
+impl std::error::Error for ExprError {}
 impl Display for ExprError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use ExprError::*;
@@ -158,6 +164,7 @@ impl Display for ExprError {
         }
     }
 }
+impl std::error::Error for TypeError {}
 impl Display for TypeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use TypeError::*;
@@ -168,6 +175,7 @@ impl Display for TypeError {
         }
     }
 }
+impl std::error::Error for CommandError {}
 impl Display for CommandError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use CommandError::*;

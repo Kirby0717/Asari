@@ -5,15 +5,20 @@ mod runtime;
 
 use cli::*;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use clap::Parser;
+
+static CURRENT_EXE: LazyLock<PathBuf> = LazyLock::new(|| {
+    std::env::current_exe().expect("自身のファイルパスの取得に失敗しました")
+});
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Some(Commands::Subst { payload_path }) => {
-            run_subst_mode(payload_path)?;
+            run_subst_mode(payload_path);
         }
         None => {
             run_shell_mode()?;
@@ -22,19 +27,27 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn run_subst_mode<P: AsRef<Path>>(payload_path: P) -> anyhow::Result<()> {
-    let mut payload = runtime::payload::read_payload(&payload_path)?;
-    runtime::exec::execute_command_line(
+fn run_subst_mode<P: AsRef<Path>>(payload_path: P) -> ! {
+    let mut payload = match runtime::subst::read_payload(&payload_path) {
+        Ok(payload) => payload,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1)
+        }
+    };
+    if let Err(e) = runtime::exec::execute_command_line(
         &payload.command,
         &mut payload.context,
-    )?;
-    Ok(())
+    ) {
+        eprintln!("{e}");
+    }
+    std::process::exit(payload.context.last_status)
 }
 
 fn run_shell_mode() -> anyhow::Result<()> {
     welcome();
 
-    let mut shell = runtime::exec::Shell::new();
+    let mut shell = runtime::Shell::new();
 
     loop {
         continuation(&std::env::current_dir()?);
@@ -67,9 +80,7 @@ fn run_shell_mode() -> anyhow::Result<()> {
 
                 // 実行
                 match shell.execute(&command) {
-                    Err(runtime::exec::Error::Exit(code)) => {
-                        std::process::exit(code)
-                    }
+                    Err(runtime::Error::Exit(code)) => std::process::exit(code),
                     Err(e) => eprintln!("コマンドの実行に失敗しました : {e}"),
                     _ => {}
                 }

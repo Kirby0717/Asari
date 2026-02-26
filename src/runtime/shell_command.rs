@@ -1,28 +1,24 @@
-use super::value::Value;
+use super::{Result, Value};
 
 use std::fmt::Display;
-use std::io::Error as IoError;
 
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug)]
 pub enum Error {
-    Exit(i32),
     InvalidArgs,
-    Stdio(std::io::Error),
     Other(String),
 }
-impl From<IoError> for Error {
-    fn from(value: IoError) -> Self {
-        Error::Stdio(value)
-    }
-}
+impl std::error::Error for Error {}
 impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{self:?}")
+        use Error::*;
+        match self {
+            InvalidArgs => write!(f, "不正な引数です"),
+            Other(e) => write!(f, "不明なエラー : {e}"),
+        }
     }
 }
-pub type Result<T> = ::std::result::Result<T, Error>;
 
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum ShellCommandKind {
@@ -39,26 +35,20 @@ pub fn find_shell_command(name: &str) -> Option<ShellCommandKind> {
 }
 pub fn run(command: &ShellCommandKind, args: &[Value]) -> Result<i32> {
     use ShellCommandKind::*;
-    let result = match command {
+    match command {
         Cd => cd(args),
         Exit => exit(args),
-    };
-    if let Err(Error::Stdio(e)) = &result
-        && e.kind() == std::io::ErrorKind::BrokenPipe
-    {
-        return Ok(0);
     }
-    result
 }
 fn cd(args: &[Value]) -> Result<i32> {
     if 1 < args.len() {
-        return Err(Error::InvalidArgs);
+        return Err(Error::InvalidArgs.into());
     }
 
     if let Some(dir) = args.first() {
         let Value::String(dir) = dir
         else {
-            return Err(Error::InvalidArgs);
+            return Err(Error::InvalidArgs.into());
         };
         let next_dir = std::env::current_dir()
             .map_err(|_| {
@@ -73,7 +63,7 @@ fn cd(args: &[Value]) -> Result<i32> {
             })?;
         }
         else {
-            return Err(Error::InvalidArgs);
+            return Err(Error::InvalidArgs.into());
         }
     }
     else {
@@ -119,5 +109,5 @@ fn exit(args: &[Value]) -> Result<i32> {
             }
         }
     }
-    Err(Error::Exit(exit_code))
+    Err(super::Error::Exit(exit_code))
 }
