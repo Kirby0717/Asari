@@ -58,7 +58,6 @@ pub enum ExprError {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TypeError {
     UnclosedTypeParam,
-    InvalidTypeName(String),
     NoType,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -167,7 +166,6 @@ impl Display for TypeError {
         use TypeError::*;
         match self {
             UnclosedTypeParam => write!(f, "type<>が閉じられていません"),
-            InvalidTypeName(name) => write!(f, "不正な型名\"{name}\"です"),
             NoType => write!(f, "型がありません"),
         }
     }

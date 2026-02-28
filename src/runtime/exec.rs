@@ -1,5 +1,6 @@
-use super::eval::{eval_command_part, eval_expr};
-use super::{Context, Result, Value, status_into_i32};
+use super::eval::{Error as EvalError, eval_command_part, eval_expr};
+use super::shell_command::Error as ShellCommandError;
+use super::{Context, Value, status_into_i32};
 use crate::parse::{
     Command, CommandLine, CommandPart, InputRedirect, MergeRedirect,
     OutputMode, OutputRedirect, Pipe, Pipeline, Redirect, Statement,
@@ -11,8 +12,11 @@ use std::process::Stdio;
 use std::thread::JoinHandle;
 use std::{ffi::OsString, io::Error as IoError, path::PathBuf};
 
+type Result<T> = ::std::result::Result<T, Error>;
 #[derive(Debug)]
 pub enum Error {
+    Eval(EvalError),
+    ShellCommand(ShellCommandError),
     EmptyCommand,
     NotFoundCommand(String),
     InvalidCommandNameType,
@@ -22,11 +26,21 @@ pub enum Error {
     InvalidEnvValueType,
     InvalidTempEnvValueType,
 }
+impl Error {
+    pub fn is_exit(&self) -> Option<i32> {
+        match self {
+            Error::ShellCommand(ShellCommandError::Exit(code)) => Some(*code),
+            _ => None,
+        }
+    }
+}
 impl std::error::Error for Error {}
 impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use Error::*;
         match self {
+            Eval(e) => e.fmt(f),
+            ShellCommand(e) => e.fmt(f),
             EmptyCommand => write!(f, "空のコマンド名です"),
             NotFoundCommand(name) => {
                 write!(f, "コマンド{name}が見つかりませんでした")
@@ -46,9 +60,23 @@ impl Display for Error {
         }
     }
 }
+impl From<EvalError> for Error {
+    fn from(value: EvalError) -> Self {
+        Error::Eval(value)
+    }
+}
+impl From<ShellCommandError> for Error {
+    fn from(value: ShellCommandError) -> Self {
+        Error::ShellCommand(value)
+    }
+}
+impl From<RedirectError> for Error {
+    fn from(value: RedirectError) -> Self {
+        Error::Redirect(value)
+    }
+}
 #[derive(Debug)]
 pub enum RedirectError {
-    FailCloneFile(IoError),
     FailOpenFile(IoError),
     InvalidFileNameType,
     InvalidHereInputType,
@@ -58,9 +86,6 @@ impl Display for RedirectError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use RedirectError::*;
         match self {
-            FailCloneFile(e) => {
-                write!(f, "ファイルディスクリプタのコピーに失敗しました : {e}")
-            }
             FailOpenFile(e) => write!(f, "ファイルが開けませんでした : {e}"),
             InvalidFileNameType => {
                 write!(f, "ファイル名は文字列で指定してください")
@@ -104,7 +129,7 @@ fn execute_statement(statement: &Statement, env: &mut Context) -> Result<()> {
                 .args
                 .iter()
                 .map(|arg| eval_command_part(arg, env))
-                .collect::<Result<Vec<_>>>()?;
+                .collect::<std::result::Result<Vec<_>, _>>()?;
             env.last_status = super::shell_command::run(&command, &args)?;
         }
         Pipeline(pipeline) => {
@@ -248,11 +273,11 @@ impl ResolvedCommand {
             .collect::<Result<Vec<_>>>()?;
 
         // 引数の評価
-        let args: Vec<_> = command
+        let args = command
             .args
             .iter()
             .map(|arg| eval_command_part(arg, env))
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(Self {
             name,
@@ -304,7 +329,7 @@ impl StdioOutputConfig {
         Ok(match self {
             Inherit => Inherit,
             File(file) => {
-                File(file.try_clone().map_err(RedirectError::FailCloneFile)?)
+                File(file.try_clone().map_err(RedirectError::FailOpenFile)?)
             }
             PipeWriter(writer) => {
                 PipeWriter(writer.try_clone().map_err(Error::Pipe)?)

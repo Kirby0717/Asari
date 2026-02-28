@@ -1,4 +1,5 @@
-use super::{Context, Result, Type, Value};
+use super::subst::Error as SubstError;
+use super::{Context, Type, Value};
 use crate::parse::{
     AstType, CommandPart, Expr, ExprInfix, ExprPostfix, ExprPrefix, Primary,
     SpecialVar,
@@ -8,8 +9,10 @@ use std::fmt::Display;
 use std::path::{Component, Path, PathBuf};
 use std::string::String;
 
+type Result<T> = ::std::result::Result<T, Error>;
 #[derive(Debug)]
 pub enum Error {
+    Subst(SubstError),
     TypeMismatch,
     OverFlow,
     UnwrapNone,
@@ -25,6 +28,7 @@ impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use Error::*;
         match self {
+            Subst(e) => e.fmt(f),
             TypeMismatch => write!(f, "型が違います"),
             OverFlow => write!(f, "整数がオーバーフローしました"),
             UnwrapNone => write!(f, "noneをunwrapしました"),
@@ -35,6 +39,11 @@ impl Display for Error {
             InvalidUtf8Path => write!(f, "パスがUTF-8ではありません"),
             InvalidGlobPattern => write!(f, "不正なglobパターンです"),
         }
+    }
+}
+impl From<SubstError> for Error {
+    fn from(value: SubstError) -> Self {
+        Error::Subst(value)
     }
 }
 

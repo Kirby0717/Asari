@@ -164,17 +164,7 @@ pub fn ast_type(input: &mut Input) -> ModalResult<AstType> {
         if opt('_').parse_next(input)?.is_some() {
             return Ok(Unknown);
         }
-        let name = ident
-            .try_map_with_span(|name| {
-                if name.chars().all(|c| c.is_ascii_lowercase()) {
-                    Ok(name)
-                }
-                else {
-                    Err(TypeError::InvalidTypeName(name))
-                }
-            })
-            .cut()
-            .parse_next(input)?;
+        let name = ident.cut().parse_next(input)?;
         if opt((space0, '<')).parse_next(input)?.is_some() {
             let generics = preceded(space0, ast_type)
                 .map_err_with_span(|_| TypeError::NoType)

@@ -3,13 +3,9 @@ pub mod exec;
 pub mod shell_command;
 pub mod subst;
 
-use eval::Error as EvalError;
-use exec::{Error as ExecError, RedirectError};
-use shell_command::Error as ShellCommandError;
-use subst::Error as SubstError;
+use exec::Error as ExecError;
 
 use std::collections::HashMap;
-use std::fmt::Display;
 
 use serde::{Deserialize, Serialize};
 
@@ -24,55 +20,8 @@ impl Shell {
     pub fn execute(
         &mut self,
         shell_command: &crate::parse::CommandLine,
-    ) -> Result<()> {
+    ) -> Result<(), ExecError> {
         exec::execute_command_line(shell_command, &mut self.context)
-    }
-}
-
-type Result<T> = ::std::result::Result<T, Error>;
-#[derive(Debug)]
-pub enum Error {
-    Exit(i32),
-    Eval(EvalError),
-    Exec(ExecError),
-    ShellCommand(ShellCommandError),
-    Subst(SubstError),
-}
-impl Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use Error::*;
-        match self {
-            Exit(code) => write!(f, "コード{code}で終了します"),
-            Eval(e) => e.fmt(f),
-            Exec(e) => e.fmt(f),
-            ShellCommand(e) => e.fmt(f),
-            Subst(e) => e.fmt(f),
-        }
-    }
-}
-impl From<EvalError> for Error {
-    fn from(value: EvalError) -> Self {
-        Error::Eval(value)
-    }
-}
-impl From<ExecError> for Error {
-    fn from(value: ExecError) -> Self {
-        Error::Exec(value)
-    }
-}
-impl From<RedirectError> for Error {
-    fn from(value: RedirectError) -> Self {
-        Error::Exec(ExecError::Redirect(value))
-    }
-}
-impl From<ShellCommandError> for Error {
-    fn from(value: ShellCommandError) -> Self {
-        Error::ShellCommand(value)
-    }
-}
-impl From<SubstError> for Error {
-    fn from(value: SubstError) -> Self {
-        Error::Subst(value)
     }
 }
 

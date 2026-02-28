@@ -1,11 +1,13 @@
-use super::{Result, Value};
+use super::Value;
 
 use std::fmt::Display;
 
 use serde::{Deserialize, Serialize};
 
+type Result<T> = ::std::result::Result<T, Error>;
 #[derive(Debug)]
 pub enum Error {
+    Exit(i32),
     InvalidArgs,
     Other(String),
 }
@@ -14,6 +16,7 @@ impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use Error::*;
         match self {
+            Exit(code) => write!(f, "コード{code}で終了します"),
             InvalidArgs => write!(f, "不正な引数です"),
             Other(e) => write!(f, "不明なエラー : {e}"),
         }
@@ -42,13 +45,13 @@ pub fn run(command: &ShellCommandKind, args: &[Value]) -> Result<i32> {
 }
 fn cd(args: &[Value]) -> Result<i32> {
     if 1 < args.len() {
-        return Err(Error::InvalidArgs.into());
+        return Err(Error::InvalidArgs);
     }
 
     if let Some(dir) = args.first() {
         let Value::String(dir) = dir
         else {
-            return Err(Error::InvalidArgs.into());
+            return Err(Error::InvalidArgs);
         };
         let next_dir = std::env::current_dir()
             .map_err(|_| {
@@ -63,7 +66,7 @@ fn cd(args: &[Value]) -> Result<i32> {
             })?;
         }
         else {
-            return Err(Error::InvalidArgs.into());
+            return Err(Error::InvalidArgs);
         }
     }
     else {
@@ -109,5 +112,5 @@ fn exit(args: &[Value]) -> Result<i32> {
             }
         }
     }
-    Err(super::Error::Exit(exit_code))
+    Err(Error::Exit(exit_code))
 }

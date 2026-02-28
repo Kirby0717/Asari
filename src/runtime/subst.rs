@@ -1,4 +1,4 @@
-use super::{Context, Result, status_into_i32};
+use super::{Context, status_into_i32};
 use crate::parse::CommandLine;
 
 use std::io::Error as IoError;
@@ -13,6 +13,7 @@ pub struct SubstPayload {
     pub context: Context,
 }
 
+type Result<T> = ::std::result::Result<T, Error>;
 #[derive(Debug)]
 pub enum Error {
     FailExecuteItself(IoError),

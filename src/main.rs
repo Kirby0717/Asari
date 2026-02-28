@@ -79,10 +79,13 @@ fn run_shell_mode() -> anyhow::Result<()> {
                 }
 
                 // 実行
-                match shell.execute(&command) {
-                    Err(runtime::Error::Exit(code)) => std::process::exit(code),
-                    Err(e) => eprintln!("コマンドの実行に失敗しました : {e}"),
-                    _ => {}
+                if let Err(e) = shell.execute(&command) {
+                    if let Some(code) = e.is_exit() {
+                        std::process::exit(code);
+                    }
+                    else {
+                        eprintln!("コマンドの実行に失敗しました : {e}");
+                    }
                 }
             }
             Err(e) => {
