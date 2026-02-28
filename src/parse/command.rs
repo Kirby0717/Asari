@@ -31,7 +31,8 @@ pub fn statement(input: &mut Input) -> ModalResult<Statement> {
             shell_command.spanned().map(ShellCommand),
             env_assign.spanned().map(EnvAssign),
             pipeline.spanned().map(Pipeline),
-        )),
+        ))
+        .cut(),
     )
     .parse_next(input)
 }
@@ -56,7 +57,7 @@ pub fn shell_command(input: &mut Input) -> ModalResult<ShellCommand> {
                 .parse_next(input)?;
 
                 command_part
-                    .map_err_with_span(|_| CommandError::NoCommand)
+                    .or_err_with_span(CommandError::NoCommand)
                     .spanned()
                     .parse_next(input)
             }),
@@ -111,7 +112,7 @@ pub fn command(input: &mut Input) -> ModalResult<Command> {
 
         // コマンド
         let name = command_part
-            .map_err_with_span(|_| CommandError::NoCommand)
+            .or_err_with_span(CommandError::NoCommand)
             .spanned()
             .parse_next(input)?;
 
@@ -153,7 +154,7 @@ pub fn temp_env(
         let _ = space0.parse_next(input)?;
         let val = expr
             .spanned()
-            .map_err_with_span(|_| CommandError::NoValue)
+            .or_err_with_span(CommandError::NoValue)
             .cut()
             .parse_next(input)?;
         Ok((var, val))
@@ -199,7 +200,7 @@ pub fn input_redirect(input: &mut Input) -> ModalResult<InputRedirect> {
             preceded(
                 ("<<<", space0),
                 command_part
-                    .map_err_with_span(|_| CommandError::NoRedirectTarget)
+                    .or_err_with_span(CommandError::NoRedirectTarget)
                     .spanned(),
             )
             .map(HereString),
@@ -208,7 +209,7 @@ pub fn input_redirect(input: &mut Input) -> ModalResult<InputRedirect> {
             preceded(
                 ("<", space0),
                 command_part
-                    .map_err_with_span(|_| CommandError::NoRedirectTarget)
+                    .or_err_with_span(CommandError::NoRedirectTarget)
                     .spanned(),
             )
             .map(File),
@@ -235,7 +236,7 @@ pub fn output_redirect(
             preceded(
                 space0,
                 command_part
-                    .map_err_with_span(|_| CommandError::NoRedirectTarget)
+                    .or_err_with_span(CommandError::NoRedirectTarget)
                     .spanned(),
             ),
         ),

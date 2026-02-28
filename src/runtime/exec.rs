@@ -162,7 +162,7 @@ fn execute_statement(statement: &Statement, env: &mut Context) -> Result<()> {
                     unsafe { std::env::remove_var(name.as_ref()) };
                 }
                 _ => {
-                    return Err(Error::InvalidEnvValueType.into());
+                    return Err(Error::InvalidEnvValueType);
                 }
             }
         }
@@ -248,14 +248,14 @@ impl ResolvedCommand {
         let name = eval_command_part(&command.name, env)?;
         let Value::String(name) = name
         else {
-            return Err(Error::InvalidCommandNameType.into());
+            return Err(Error::InvalidCommandNameType);
         };
         if name.is_empty() {
-            return Err(Error::EmptyCommand.into());
+            return Err(Error::EmptyCommand);
         }
         let Some(name) = find_executable(&name)
         else {
-            return Err(Error::NotFoundCommand(name).into());
+            return Err(Error::NotFoundCommand(name));
         };
 
         // 一時環境変数の評価
@@ -266,7 +266,7 @@ impl ResolvedCommand {
                 let (env_var, env_val) = temp_env.as_ref();
                 let Value::String(env_val) = eval_expr(env_val, env)?
                 else {
-                    return Err(Error::InvalidTempEnvValueType.into());
+                    return Err(Error::InvalidTempEnvValueType);
                 };
                 Ok((env_var.as_ref().clone(), env_val))
             })

@@ -33,6 +33,8 @@ pub struct Context {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_pid: Option<u32>,
     pub last_status: i32,
+    #[serde(default, skip)]
+    pub current_input: String,
 }
 impl Default for Context {
     fn default() -> Self {
@@ -41,6 +43,7 @@ impl Default for Context {
             shell_vars: Default::default(),
             last_pid: None,
             last_status: 0,
+            current_input: String::new(),
         }
     }
 }

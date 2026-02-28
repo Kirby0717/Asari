@@ -62,7 +62,7 @@ fn run_shell_mode() -> anyhow::Result<()> {
                 let command = match parsed {
                     Ok(command) => command,
                     Err(e) => {
-                        let display = e.inner().display(e.input());
+                        let display = e.inner().display(line);
                         eprintln!("{display}");
                         continue;
                     }

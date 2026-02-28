@@ -323,7 +323,7 @@ fn ident(input: &mut Input) -> ModalResult<String> {
     trace(
         "ident",
         (
-            any.map_err_with_span(|()| IdentError::Expected)
+            any.or_err_with_span(IdentError::Expected)
                 .try_map_with_span(|c| {
                     if c == '_' || is_xid_start(c) {
                         Ok(c)
@@ -366,11 +366,11 @@ fn unit(input: &mut Input) -> ModalResult<()> {
     let _ = space0.parse_next(input)?;
 
     if input.is_empty() {
-        fail.map_err_at(|()| ExprError::UnclosedParen, begin..end)
+        fail.or_err_at(ExprError::UnclosedParen, begin..end)
             .parse_next(input)?;
     }
     let _ = ')'
-        .map_err_at(|()| ExprError::UnclosedParen, begin..end)
+        .or_err_at(ExprError::UnclosedParen, begin..end)
         .parse_next(input)?;
 
     Ok(())
@@ -387,11 +387,11 @@ fn paren(input: &mut Input) -> ModalResult<Expr> {
     let _ = space0.parse_next(input)?;
 
     if input.is_empty() {
-        fail.map_err_at(|()| ExprError::UnclosedParen, begin..end)
+        fail.or_err_at(ExprError::UnclosedParen, begin..end)
             .parse_next(input)?;
     }
     let _ = ')'
-        .map_err_at(|()| ExprError::UnclosedParen, begin..end)
+        .or_err_at(ExprError::UnclosedParen, begin..end)
         .parse_next(input)?;
 
     Ok(expr)
@@ -408,11 +408,11 @@ fn subst(input: &mut Input) -> ModalResult<CommandLine> {
     let _ = space0.parse_next(input)?;
 
     if input.is_empty() {
-        fail.map_err_at(|()| ExprError::UnclosedCommandSubst, begin..end)
+        fail.or_err_at(ExprError::UnclosedCommandSubst, begin..end)
             .parse_next(input)?;
     }
     let _ = ')'
-        .map_err_with_span(|()| ExprError::UnclosedCommandSubst)
+        .or_err_with_span(ExprError::UnclosedCommandSubst)
         .parse_next(input)?;
 
     Ok(command_line)
@@ -430,11 +430,11 @@ fn array(input: &mut Input) -> ModalResult<Vec<Spanned<Expr>>> {
     let _ = space0.parse_next(input)?;
 
     if input.is_empty() {
-        fail.map_err_at(|()| ExprError::UnclosedBracket, begin..end)
+        fail.or_err_at(ExprError::UnclosedBracket, begin..end)
             .parse_next(input)?;
     }
     let _ = ']'
-        .map_err_with_span(|()| ExprError::UnclosedBracket)
+        .or_err_with_span(ExprError::UnclosedBracket)
         .parse_next(input)?;
 
     Ok(array)

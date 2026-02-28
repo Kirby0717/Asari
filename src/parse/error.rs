@@ -232,10 +232,9 @@ pub struct ParseError {
     //pub context: Option<String>,
 }
 impl ParseError {
-    pub fn display(&self, input: &Input) -> String {
-        let source = **input;
+    pub fn display(&self, input: &str) -> String {
         let mut display = String::new();
-        display += &format!("{}\n", source.replace(['\n', '\r'], " "));
+        display += &format!("{}\n", input.replace(['\n', '\r'], " "));
         //display += &format!("{}^ {}\n", " ".repeat(self.span), self.kind);
         display += &format!(
             "{}{} {}\n",

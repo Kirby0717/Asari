@@ -5,7 +5,7 @@ use winnow::stream::Location;
 pub fn unicode_number(input: &mut Input) -> ModalResult<char> {
     use UnicodeEscapeError::*;
     take_until(0.., '}')
-        .map_err_with_span(|()| NoCloseBrace)
+        .or_err_with_span(NoCloseBrace)
         .try_map_with_span(|input| {
             let code = u32::from_str_radix(input, 16).map_err(InvalidHex)?;
             char::from_u32(code).ok_or(InvalidCodePoint)
@@ -16,12 +16,9 @@ pub fn unicode_number(input: &mut Input) -> ModalResult<char> {
 pub fn unicode_escape_char(input: &mut Input) -> ModalResult<char> {
     use UnicodeEscapeError::*;
     let _ = 'u'.parse_next(input)?;
-    let _ = '{'.map_err_with_span(|()| NoOpenBrace).parse_next(input)?;
+    let _ = '{'.or_err_with_span(NoOpenBrace).parse_next(input)?;
     let c = unicode_number.cut().parse_next(input)?;
-    let _ = '}'
-        .map_err_with_span(|()| NoCloseBrace)
-        .cut()
-        .parse_next(input)?;
+    let _ = '}'.or_err_with_span(NoCloseBrace).cut().parse_next(input)?;
     Ok(c)
 }
 pub fn escape_char(input: &mut Input) -> ModalResult<char> {
@@ -36,7 +33,7 @@ pub fn escape_char(input: &mut Input) -> ModalResult<char> {
             '\"' => any.value('\"'),
             '\'' => any.value('\''),
             '0' => any.value('\0'),
-            c => fail.map_err_with_span(|()| {
+            c => fail.or_err_with_span( {
                 LiteralError::UnrecognizedEscape(c)
             }).cut(),
         ),
@@ -53,7 +50,7 @@ pub fn quoted_string(input: &mut Input) -> ModalResult<String> {
         .parse_next(input)?;
 
     let _ = '\''
-        .map_err_at(|()| LiteralError::UnclosedQuote, begin..end)
+        .or_err_at(LiteralError::UnclosedQuote, begin..end)
         .cut()
         .parse_next(input)?;
     Ok(s)
@@ -67,7 +64,7 @@ pub fn double_quoted_string(input: &mut Input) -> ModalResult<String> {
         .parse_next(input)?;
 
     let _ = '"'
-        .map_err_at(|()| LiteralError::UnclosedDoubleQuote, begin..end)
+        .or_err_at(LiteralError::UnclosedDoubleQuote, begin..end)
         .cut()
         .parse_next(input)?;
     Ok(s)
@@ -81,7 +78,7 @@ pub fn raw_string(input: &mut Input) -> ModalResult<String> {
     let end = input.previous_token_end();
 
     let s = take_until(0.., delimiter.as_str())
-        .map_err_at(|()| LiteralError::UnclosedRawString, begin..end)
+        .or_err_at(LiteralError::UnclosedRawString, begin..end)
         .cut()
         .parse_next(input)?;
 
@@ -97,7 +94,7 @@ pub fn path_string(input: &mut Input) -> ModalResult<String> {
     let end = input.previous_token_end();
 
     let s = take_until(0.., delimiter.as_str())
-        .map_err_at(|()| LiteralError::UnclosedPathString, begin..end)
+        .or_err_at(LiteralError::UnclosedPathString, begin..end)
         .cut()
         .parse_next(input)?;
 

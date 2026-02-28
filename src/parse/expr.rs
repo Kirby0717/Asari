@@ -167,11 +167,11 @@ pub fn ast_type(input: &mut Input) -> ModalResult<AstType> {
         let name = ident.cut().parse_next(input)?;
         if opt((space0, '<')).parse_next(input)?.is_some() {
             let generics = preceded(space0, ast_type)
-                .map_err_with_span(|_| TypeError::NoType)
+                .or_err_with_span(TypeError::NoType)
                 .cut()
                 .parse_next(input)?;
             let _ = (space0, '>')
-                .map_err_with_span(|_| TypeError::UnclosedTypeParam)
+                .or_err_with_span(TypeError::UnclosedTypeParam)
                 .cut()
                 .parse_next(input)?;
             Ok(Generics(name, Box::new(generics)))

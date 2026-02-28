@@ -61,51 +61,49 @@ pub trait ParserExt<I, O, E>: Parser<I, O, E> {
         }
     }
 }
-impl<I, O, E, P: Parser<I, O, ErrMode<E>>> ParserModalExt<I, O, E> for P {}
+/*impl<I, O, E, P: Parser<I, O, ErrMode<E>>> ParserModalExt<I, O, E> for P {}
 pub trait ParserModalExt<I, O, E>: Parser<I, O, ErrMode<E>> {
-    #[inline(always)]
-    fn map_err_with_span<G, E2>(
-        self,
-        map: G,
-    ) -> impls::MapErrWithSpan<Self, G, I, O, E, E2>
-    where
-        Self: Sized,
-        G: FnMut(E) -> E2,
-        I: Location,
-    {
-        impls::MapErrWithSpan {
-            parser: self,
-            map,
-            i: PhantomData,
-            o: PhantomData,
-            e: PhantomData,
-            e2: PhantomData,
-        }
-    }
-    fn map_err_at<G, E2>(
-        self,
-        map: G,
-        span: Span,
-    ) -> impls::MapErrAt<Self, G, I, O, E, E2>
-    where
-        Self: Sized,
-        G: FnMut(E) -> E2,
-        I: Location,
-    {
-        impls::MapErrAt {
-            parser: self,
-            map,
-            span,
-            i: PhantomData,
-            o: PhantomData,
-            e: PhantomData,
-            e2: PhantomData,
-        }
-    }
-}
+}*/
 
 impl<I, O, P: Parser<I, O, ErrMode<ParseError>>> ParserSpanExt<I, O> for P {}
 pub trait ParserSpanExt<I, O>: Parser<I, O, ErrMode<ParseError>> {
+    #[inline(always)]
+    fn or_err_with_span<E2>(
+        self,
+        kind: E2,
+    ) -> impls::OrErrWithSpan<Self, I, O, E2>
+    where
+        Self: Sized,
+        I: Location,
+        E2: Clone,
+        ParseErrorKind: FromExternalError<I, E2>,
+    {
+        impls::OrErrWithSpan {
+            parser: self,
+            kind,
+            i: PhantomData,
+            o: PhantomData,
+        }
+    }
+    fn or_err_at<E2>(
+        self,
+        kind: E2,
+        span: Span,
+    ) -> impls::OrErrAt<Self, I, O, E2>
+    where
+        Self: Sized,
+        I: Location,
+        E2: Clone,
+        ParseErrorKind: FromExternalError<I, E2>,
+    {
+        impls::OrErrAt {
+            parser: self,
+            kind,
+            span,
+            i: PhantomData,
+            o: PhantomData,
+        }
+    }
     #[inline(always)]
     fn try_map_with_span<G, O2, E2>(
         self,

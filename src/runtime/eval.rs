@@ -149,7 +149,7 @@ fn eval_prefix(
             [ Int(a) ] { Neg checked_neg }
         }
         @extra:
-        _ => return Err(Error::TypeMismatch.into()),
+        _ => return Err(Error::TypeMismatch),
     }
 }
 fn eval_infix(
@@ -193,7 +193,7 @@ fn eval_infix(
         @extra:
         (String(a), String(b), Add) => (a + &b).into(),
         (Option(a), b, UnwrapOr) => *a.unwrap_or(Box::new(b)),
-        _ => return Err(Error::TypeMismatch.into()),
+        _ => return Err(Error::TypeMismatch),
     }
 }
 fn eval_postfix(
@@ -213,7 +213,7 @@ fn eval_postfix(
                 *a
             }
             else {
-                return Err(Error::UnwrapNone.into());
+                return Err(Error::UnwrapNone);
             }
         }
         (Option(a), IsSome) => a.is_some().into(),
@@ -223,7 +223,7 @@ fn eval_postfix(
             let index = eval_expr(index, env)?;
             let Int(index) = index
             else {
-                return Err(Error::TypeMismatch.into());
+                return Err(Error::TypeMismatch);
             };
             let index = if index >= 0 {
                 // 正
@@ -241,7 +241,7 @@ fn eval_postfix(
             index.and_then(|index| v.get(index).cloned()).into()
         }
         (v, Cast(t)) => eval_cast(&v, &eval_ast_type(t)?)?,
-        _ => return Err(Error::TypeMismatch.into()),
+        _ => return Err(Error::TypeMismatch),
     })
 }
 fn eval_primary(primary: &Primary, env: &mut Context) -> Result<Value> {
@@ -304,12 +304,12 @@ fn eval_ast_type(ast_type: &AstType) -> Result<Type> {
             "float" => Type::Float,
             "bool" => Type::Bool,
             "unit" => Type::Unit,
-            _ => return Err(Error::UnknownType(name.clone()).into()),
+            _ => return Err(Error::UnknownType(name.clone())),
         },
         Generics(name, t) => match name.as_str() {
             "array" => Type::Array(Box::new(eval_ast_type(t)?)),
             "option" => Type::Option(Box::new(eval_ast_type(t)?)),
-            _ => return Err(Error::UnknownType(name.clone()).into()),
+            _ => return Err(Error::UnknownType(name.clone())),
         },
     })
 }
@@ -327,7 +327,7 @@ fn eval_cast(value: &Value, r#type: &Type) -> Result<Value> {
         (String(s), Type::Bool) => match s.as_str() {
             "true" => true,
             "false" => false,
-            _ => return Err(FailCast.into()),
+            _ => return Err(FailCast),
         }
         .into(),
         (Int(a), Type::String) => a.to_string().into(),
@@ -339,7 +339,7 @@ fn eval_cast(value: &Value, r#type: &Type) -> Result<Value> {
                 ((*a) as i64).into()
             }
             else {
-                return Err(FailCast.into());
+                return Err(FailCast);
             }
         }
         (Float(a), Type::Float) => (*a).into(),
@@ -354,7 +354,7 @@ fn eval_cast(value: &Value, r#type: &Type) -> Result<Value> {
             o.as_ref().map(|v| eval_cast(v, t)).transpose()?.into()
         }
         (Unit, Type::Unit) => ().into(),
-        _ => return Err(FailCast.into()),
+        _ => return Err(FailCast),
     })
 }
 fn eval_path_string(path_string: &str, _env: &mut Context) -> Result<Value> {
@@ -393,11 +393,11 @@ fn tilde_expand(path: &str) -> Result<String> {
             // ホームディレクトリの取得
             let Some(home_dir) = dirs::home_dir()
             else {
-                return Err(Error::NoHomeDir.into());
+                return Err(Error::NoHomeDir);
             };
             let Ok(home_dir) = home_dir.into_os_string().into_string()
             else {
-                return Err(Error::InvalidUtf8Path.into());
+                return Err(Error::InvalidUtf8Path);
             };
             return Ok(home_dir + path);
         }
@@ -432,7 +432,7 @@ fn glob_expand<P: AsRef<Path>>(
     };
     let Some(pattern) = pattern.to_str()
     else {
-        return Err(Error::InvalidUtf8Path.into());
+        return Err(Error::InvalidUtf8Path);
     };
 
     // ファイル or フォルダの列挙
@@ -497,7 +497,7 @@ fn glob_match(pattern: &[char], target: &[char]) -> Result<bool> {
                 }
                 else {
                     // 閉じられていないならエラー
-                    return Err(Error::InvalidGlobPattern.into());
+                    return Err(Error::InvalidGlobPattern);
                 }
             }
             pc => {
@@ -532,7 +532,7 @@ fn glob_match_class(set: &[char], target: char) -> Result<bool> {
             // その次があれば範囲
             if let Some(&r) = iter.next() {
                 if c > r {
-                    return Err(Error::InvalidGlobPattern.into());
+                    return Err(Error::InvalidGlobPattern);
                 }
                 set.push(MatchSet::Range(c, r));
             }

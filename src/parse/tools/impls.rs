@@ -101,68 +101,81 @@ where
     }
 }
 
-pub struct MapErrWithSpan<F, G, I, O, E, E2>
+pub struct OrErrWithSpan<F, I, O, E2>
 where
-    F: Parser<I, O, ErrMode<E>>,
-    G: FnMut(E) -> E2,
+    F: Parser<I, O, ErrMode<ParseError>>,
     I: Location,
+    E2: Clone,
+    ParseErrorKind: FromExternalError<I, E2>,
 {
     pub(super) parser: F,
-    pub(super) map: G,
+    pub(super) kind: E2,
     pub(super) i: PhantomData<I>,
     pub(super) o: PhantomData<O>,
-    pub(super) e: PhantomData<E>,
-    pub(super) e2: PhantomData<E2>,
 }
-impl<F, G, I, O, E, E2> Parser<I, O, ErrMode<ParseError>>
-    for MapErrWithSpan<F, G, I, O, E, E2>
+impl<F, I, O, E2> Parser<I, O, ErrMode<ParseError>>
+    for OrErrWithSpan<F, I, O, E2>
 where
-    F: Parser<I, O, ErrMode<E>>,
-    G: FnMut(E) -> E2,
+    F: Parser<I, O, ErrMode<ParseError>>,
     I: Location,
+    E2: Clone,
     ParseErrorKind: FromExternalError<I, E2>,
 {
     #[inline]
     fn parse_next(&mut self, input: &mut I) -> ModalResult<O, ParseError> {
         let begin = input.current_token_start();
         self.parser.parse_next(input).map_err(|e| {
-            e.map(|e| ParseError {
-                kind: ParseErrorKind::from_external_error(input, (self.map)(e)),
-                span: begin..begin + 1,
-            })
+            if matches!(e, ErrMode::Backtrack(_)) {
+                ErrMode::Backtrack(ParseError {
+                    kind: ParseErrorKind::from_external_error(
+                        input,
+                        self.kind.clone(),
+                    ),
+                    span: begin..begin + 1,
+                })
+            }
+            else {
+                e
+            }
         })
     }
 }
 
-pub struct MapErrAt<F, G, I, O, E, E2>
+pub struct OrErrAt<F, I, O, E2>
 where
-    F: Parser<I, O, ErrMode<E>>,
-    G: FnMut(E) -> E2,
+    F: Parser<I, O, ErrMode<ParseError>>,
     I: Location,
+    E2: Clone,
+    ParseErrorKind: FromExternalError<I, E2>,
 {
     pub(super) parser: F,
-    pub(super) map: G,
+    pub(super) kind: E2,
     pub(super) span: Span,
     pub(super) i: PhantomData<I>,
     pub(super) o: PhantomData<O>,
-    pub(super) e: PhantomData<E>,
-    pub(super) e2: PhantomData<E2>,
 }
-impl<F, G, I, O, E, E2> Parser<I, O, ErrMode<ParseError>>
-    for MapErrAt<F, G, I, O, E, E2>
+impl<F, I, O, E2> Parser<I, O, ErrMode<ParseError>> for OrErrAt<F, I, O, E2>
 where
-    F: Parser<I, O, ErrMode<E>>,
-    G: FnMut(E) -> E2,
+    F: Parser<I, O, ErrMode<ParseError>>,
     I: Location,
+    E2: Clone,
     ParseErrorKind: FromExternalError<I, E2>,
 {
     #[inline]
     fn parse_next(&mut self, input: &mut I) -> ModalResult<O, ParseError> {
         self.parser.parse_next(input).map_err(|e| {
-            e.map(|e| ParseError {
-                kind: ParseErrorKind::from_external_error(input, (self.map)(e)),
-                span: self.span.clone(),
-            })
+            if matches!(e, ErrMode::Backtrack(_)) {
+                ErrMode::Backtrack(ParseError {
+                    kind: ParseErrorKind::from_external_error(
+                        input,
+                        self.kind.clone(),
+                    ),
+                    span: self.span.clone(),
+                })
+            }
+            else {
+                e
+            }
         })
     }
 }
