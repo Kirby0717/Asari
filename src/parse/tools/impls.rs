@@ -1,3 +1,4 @@
+use super::Span;
 use crate::parse::error::*;
 
 use std::marker::PhantomData;
@@ -14,10 +15,10 @@ where
     I: Stream,
     E: ParserError<I> + ModalError,
 {
-    pub(crate) parser: F,
-    pub(crate) i: PhantomData<I>,
-    pub(crate) o: PhantomData<O>,
-    pub(crate) e: PhantomData<E>,
+    pub(super) parser: F,
+    pub(super) i: PhantomData<I>,
+    pub(super) o: PhantomData<O>,
+    pub(super) e: PhantomData<E>,
 }
 impl<F, I, O, E> Parser<I, O, E> for Cut<F, I, O, E>
 where
@@ -35,10 +36,10 @@ where
     F: Parser<I, O, E>,
     I: Stream + Location,
 {
-    pub(crate) parser: F,
-    pub(crate) i: PhantomData<I>,
-    pub(crate) o: PhantomData<O>,
-    pub(crate) e: PhantomData<E>,
+    pub(super) parser: F,
+    pub(super) i: PhantomData<I>,
+    pub(super) o: PhantomData<O>,
+    pub(super) e: PhantomData<E>,
 }
 impl<F, I, O, E> Parser<I, crate::parse::Spanned<O>, E> for Spanned<F, I, O, E>
 where
@@ -60,18 +61,58 @@ where
     }
 }
 
+pub struct RejectWithSpan<F, G, I, O, E, E2>
+where
+    F: Parser<I, O, E>,
+    G: FnMut(O) -> E2,
+    I: Stream + Location,
+    ParseErrorKind: FromExternalError<I, E2>,
+{
+    pub(super) parser: F,
+    pub(super) map: G,
+    pub(super) i: PhantomData<I>,
+    pub(super) o: PhantomData<O>,
+    pub(super) e: PhantomData<E>,
+    pub(super) e2: PhantomData<E2>,
+}
+impl<F, G, I, O, E, E2> Parser<I, E, ErrMode<ParseError>>
+    for RejectWithSpan<F, G, I, O, E, E2>
+where
+    F: Parser<I, O, E>,
+    G: FnMut(O) -> E2,
+    I: Stream + Location,
+    ParseErrorKind: FromExternalError<I, E2>,
+{
+    fn parse_next(&mut self, input: &mut I) -> ModalResult<E, ParseError> {
+        let begin = input.current_token_start();
+        match self.parser.parse_next(input) {
+            Ok(output) => {
+                let end = input.previous_token_end();
+                Err(ErrMode::Cut(ParseError {
+                    kind: ParseErrorKind::from_external_error(
+                        input,
+                        (self.map)(output),
+                    ),
+                    span: begin..end,
+                }))
+            }
+            Err(e) => Ok(e),
+        }
+    }
+}
+
 pub struct MapErrWithSpan<F, G, I, O, E, E2>
 where
     F: Parser<I, O, ErrMode<E>>,
     G: FnMut(E) -> E2,
     I: Location,
 {
-    pub(crate) parser: F,
-    pub(crate) map: G,
-    pub(crate) i: PhantomData<I>,
-    pub(crate) o: PhantomData<O>,
-    pub(crate) e: PhantomData<E>,
-    pub(crate) e2: PhantomData<E2>,
+    pub(super) parser: F,
+    pub(super) map: G,
+    pub(super) i: PhantomData<I>,
+    pub(super) o: PhantomData<O>,
+    pub(super) e: PhantomData<E>,
+    pub(super) e2: PhantomData<E2>,
 }
 impl<F, G, I, O, E, E2> Parser<I, O, ErrMode<ParseError>>
     for MapErrWithSpan<F, G, I, O, E, E2>
@@ -93,44 +134,39 @@ where
     }
 }
 
-pub struct RejectWithSpan<F, G, I, O, E2>
+pub struct MapErrAt<F, G, I, O, E, E2>
 where
-    F: Parser<I, O, ErrMode<ParseError>>,
-    G: FnMut(O) -> E2,
-    I: Stream + Location,
-    ParseErrorKind: FromExternalError<I, E2>,
+    F: Parser<I, O, ErrMode<E>>,
+    G: FnMut(E) -> E2,
+    I: Location,
 {
-    pub(crate) parser: F,
-    pub(crate) map: G,
-    pub(crate) i: PhantomData<I>,
-    pub(crate) o: PhantomData<O>,
-    pub(crate) e2: PhantomData<E2>,
+    pub(super) parser: F,
+    pub(super) map: G,
+    pub(super) span: Span,
+    pub(super) i: PhantomData<I>,
+    pub(super) o: PhantomData<O>,
+    pub(super) e: PhantomData<E>,
+    pub(super) e2: PhantomData<E2>,
 }
-impl<F, G, I, O, E2> Parser<I, (), ErrMode<ParseError>>
-    for RejectWithSpan<F, G, I, O, E2>
+impl<F, G, I, O, E, E2> Parser<I, O, ErrMode<ParseError>>
+    for MapErrAt<F, G, I, O, E, E2>
 where
-    F: Parser<I, O, ErrMode<ParseError>>,
-    G: FnMut(O) -> E2,
-    I: Stream + Location,
+    F: Parser<I, O, ErrMode<E>>,
+    G: FnMut(E) -> E2,
+    I: Location,
     ParseErrorKind: FromExternalError<I, E2>,
 {
-    fn parse_next(&mut self, input: &mut I) -> ModalResult<(), ParseError> {
-        let begin = input.current_token_start();
-        match self.parser.parse_next(input) {
-            Ok(output) => {
-                let end = input.previous_token_end();
-                Err(ErrMode::Cut(ParseError {
-                    kind: ParseErrorKind::from_external_error(
-                        input,
-                        (self.map)(output),
-                    ),
-                    span: begin..end,
-                }))
-            }
-            Err(_) => Ok(()),
-        }
+    #[inline]
+    fn parse_next(&mut self, input: &mut I) -> ModalResult<O, ParseError> {
+        self.parser.parse_next(input).map_err(|e| {
+            e.map(|e| ParseError {
+                kind: ParseErrorKind::from_external_error(input, (self.map)(e)),
+                span: self.span.clone(),
+            })
+        })
     }
 }
+
 pub struct TryMapWithSpan<F, G, I, O, O2, E2>
 where
     F: Parser<I, O, ErrMode<ParseError>>,
@@ -138,12 +174,12 @@ where
     I: Stream + Location,
     ParseErrorKind: FromExternalError<I, E2>,
 {
-    pub(crate) parser: F,
-    pub(crate) map: G,
-    pub(crate) i: PhantomData<I>,
-    pub(crate) o: PhantomData<O>,
-    pub(crate) o2: PhantomData<O2>,
-    pub(crate) e2: PhantomData<E2>,
+    pub(super) parser: F,
+    pub(super) map: G,
+    pub(super) i: PhantomData<I>,
+    pub(super) o: PhantomData<O>,
+    pub(super) o2: PhantomData<O2>,
+    pub(super) e2: PhantomData<E2>,
 }
 impl<F, G, I, O, O2, E2> Parser<I, O2, ErrMode<ParseError>>
     for TryMapWithSpan<F, G, I, O, O2, E2>

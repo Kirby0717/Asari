@@ -45,15 +45,20 @@ pub fn shell_command(input: &mut Input) -> ModalResult<ShellCommand> {
                 // パイプ、リダイレクトは禁止
                 alt(("|", "|&"))
                     .reject_with_span(|_| InvalidPipe)
+                    .map(|()| ())
                     .parse_next(input)?;
                 alt((
                     "<<<", "<<", "<", "2>&1", "1>&2", "&>>", "&>", "2>>", "2>",
                     ">>", ">",
                 ))
                 .reject_with_span(|_| InvalidRedirect)
+                .map(|()| ())
                 .parse_next(input)?;
 
-                command_part.spanned().parse_next(input)
+                command_part
+                    .map_err_with_span(|_| CommandError::NoCommand)
+                    .spanned()
+                    .parse_next(input)
             }),
         )
         .parse_next(input)?;
@@ -100,9 +105,17 @@ pub fn pipe(input: &mut Input) -> ModalResult<Pipe> {
 }
 pub fn command(input: &mut Input) -> ModalResult<Command> {
     trace("command", |input: &mut Input| {
+        // 一時変数
         let temp_envs = repeat(0.., terminated(temp_env.spanned(), space0))
             .parse_next(input)?;
-        let name = command_part.spanned().parse_next(input)?;
+
+        // コマンド
+        let name = command_part
+            .map_err_with_span(|_| CommandError::NoCommand)
+            .spanned()
+            .parse_next(input)?;
+
+        // 引数かリダイレクト
         let mut args = vec![];
         let mut redirects = vec![];
         loop {
@@ -120,6 +133,7 @@ pub fn command(input: &mut Input) -> ModalResult<Command> {
             }
             break;
         }
+
         Ok(Command {
             temp_envs,
             name,
@@ -182,10 +196,22 @@ pub fn input_redirect(input: &mut Input) -> ModalResult<InputRedirect> {
     trace(
         "input_redirect",
         alt((
-            preceded(("<<<", space0), command_part.spanned()).map(HereString),
+            preceded(
+                ("<<<", space0),
+                command_part
+                    .map_err_with_span(|_| CommandError::NoRedirectTarget)
+                    .spanned(),
+            )
+            .map(HereString),
             //HereDocは後回し
             //preceded("<<", rest.spanned()).map(|doc| HereDoc(doc.map(str::to_string))),
-            preceded(("<", space0), command_part.spanned()).map(File),
+            preceded(
+                ("<", space0),
+                command_part
+                    .map_err_with_span(|_| CommandError::NoRedirectTarget)
+                    .spanned(),
+            )
+            .map(File),
         )),
     )
     .parse_next(input)
@@ -206,7 +232,12 @@ pub fn output_redirect(
                 ">>".value((Stdout, Append)),
                 ">".value((Stdout, Truncate)),
             )),
-            preceded(space0, command_part.spanned()),
+            preceded(
+                space0,
+                command_part
+                    .map_err_with_span(|_| CommandError::NoRedirectTarget)
+                    .spanned(),
+            ),
         ),
     )
     .parse_next(input)

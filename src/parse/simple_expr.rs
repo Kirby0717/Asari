@@ -7,24 +7,19 @@ pub fn simple_expr_primary(input: &mut Input) -> ModalResult<Primary> {
         dispatch! {peek(any);
             '\'' => quoted_string.map(Primary::String),
             '"' => double_quoted_string.map(Primary::String),
-            '$' => preceded('$', alt((
-                delimited(('(', space0), command_line.spanned(), (space0, ')'))
-                    .map(|shell_command| Primary::CommandSubst(Box::new(shell_command))),
+            '$' => alt((
+                subst.spanned().map(|subst| Primary::CommandSubst(Box::new(subst))),
                 special_var.map(Primary::SpecialVar),
-                ident.cut().map(Primary::EnvVar),
-            ))),
-            '@' => preceded('@', ident).cut().map(Primary::ShellVar),
+                ident.map(Primary::EnvVar),
+            )).cut(),
+            '@' => shell_var.cut().map(Primary::ShellVar),
             '(' => alt((
-                ('(', space0, ')').value(Primary::Unit),
-                delimited(('(', space0), expr.spanned(), (space0, ')'))
-                    .map(|expr| Primary::Paren(Box::new(expr)))
-            )),
+                unit.value(Primary::Unit),
+                paren.spanned().map(|expr| Primary::Paren(Box::new(expr)))
+            )).cut(),
             'r' => raw_string.map(Primary::String),
             'p' => path_string.map(Primary::PathString),
-            '[' => delimited(('[', space0), separated(0.., expr.spanned(), delimited(space0, ',', space0)), ']')
-                .map(|exprs| {
-                    Primary::Array(exprs)
-                }),
+            '[' => array.cut().map(Primary::Array),
             _ => fail,
         },
     )
@@ -82,7 +77,13 @@ pub fn simple_expr_pratt(input: &mut Input) -> ModalResult<Spanned<Expr>> {
         if let Some(infix) =
             opt(simple_expr_infix.spanned()).parse_next(input)?
         {
-            let rhs = simple_expr_pratt.parse_next(input)?;
+            let cursor = input.current_token_start();
+            let rhs = simple_expr_pratt(input).map_err(|_| {
+                winnow::error::ErrMode::Cut(ParseError {
+                    kind: ParseErrorKind::Expr(ExprError::NoRhs),
+                    span: cursor..cursor + 1,
+                })
+            })?;
             lhs = infix.apply(lhs, rhs);
             continue;
         }

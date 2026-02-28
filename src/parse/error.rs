@@ -1,4 +1,3 @@
-#![allow(unused)]
 use super::{Input, Span};
 
 use std::fmt::Display;
@@ -38,11 +37,11 @@ pub enum UnicodeEscapeError {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NumberError {
-    InvalidBin(ParseIntError),
-    InvalidOct(ParseIntError),
-    InvalidDec(ParseIntError),
-    InvalidHex(ParseIntError),
-    InvalidFloat(ParseFloatError),
+    Bin(ParseIntError),
+    Oct(ParseIntError),
+    Dec(ParseIntError),
+    Hex(ParseIntError),
+    Float(ParseFloatError),
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum IdentError {
@@ -53,7 +52,6 @@ pub enum IdentError {
 pub enum ExprError {
     UnclosedParen,
     UnclosedBracket,
-    UnclosedSome,
     UnclosedCommandSubst,
     NoRhs,
 }
@@ -70,7 +68,6 @@ pub enum CommandError {
     InvalidRedirect,
     NoRedirectTarget,
     NoValue,
-    NoAssignEquals(char),
 }
 impl std::error::Error for ParseErrorKind {}
 impl Display for ParseErrorKind {
@@ -120,11 +117,11 @@ impl Display for NumberError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use NumberError::*;
         match self {
-            InvalidBin(e) => fmt_int_error(f, "2進数", e),
-            InvalidOct(e) => fmt_int_error(f, "8進数", e),
-            InvalidDec(e) => fmt_int_error(f, "10進数", e),
-            InvalidHex(e) => fmt_int_error(f, "16進数", e),
-            InvalidFloat(_) => write!(f, "小数の解析に失敗しました"),
+            Bin(e) => fmt_int_error(f, "2進数", e),
+            Oct(e) => fmt_int_error(f, "8進数", e),
+            Dec(e) => fmt_int_error(f, "10進数", e),
+            Hex(e) => fmt_int_error(f, "16進数", e),
+            Float(_) => write!(f, "小数の解析に失敗しました"),
         }
     }
 }
@@ -159,7 +156,6 @@ impl Display for ExprError {
         match self {
             UnclosedParen => write!(f, "()が閉じられていません"),
             UnclosedBracket => write!(f, "[]が閉じられていません"),
-            UnclosedSome => write!(f, "some()が閉じられていません"),
             UnclosedCommandSubst => write!(f, "$()が閉じられていません"),
             NoRhs => write!(f, "演算子の右辺がありません"),
         }
@@ -186,7 +182,6 @@ impl Display for CommandError {
             InvalidRedirect => write!(f, "リダイレクトは使えません"),
             NoRedirectTarget => write!(f, "リダイレクト先が指定されていません"),
             NoValue => write!(f, "値がありません"),
-            NoAssignEquals(c) => write!(f, "{c}がありません"),
         }
     }
 }

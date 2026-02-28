@@ -110,7 +110,7 @@ fn execute_statement(statement: &Statement, env: &mut Context) -> Result<()> {
         Pipeline(pipeline) => {
             // エラーは無視してエラー出力のみ行う
             if let Err(e) = execute_pipeline(pipeline, env) {
-                eprintln!("コマンドの場所付きのエラーにする");
+                eprintln!("TODO:コマンドの場所付きのエラーにする");
                 eprintln!("{e}");
             }
         }

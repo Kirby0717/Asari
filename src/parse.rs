@@ -1,4 +1,3 @@
-#![allow(unused)]
 pub mod command;
 pub mod error;
 pub mod expr;
@@ -22,6 +21,7 @@ use winnow::{
         repeat, separated, terminated, trace,
     },
     prelude::*,
+    stream::Location,
     token::{any, rest, take, take_till, take_until, take_while},
 };
 
@@ -81,7 +81,7 @@ impl<T: std::fmt::Display> std::fmt::Display for Spanned<T> {
 pub struct CommandLine {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub statements: Vec<Spanned<Statement>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip)]
     pub comment: Option<Spanned<String>>,
 }
 #[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -345,23 +345,6 @@ fn ident(input: &mut Input) -> ModalResult<String> {
     })
     .parse_next(input)
 }
-fn env_var(input: &mut Input) -> ModalResult<String> {
-    trace("env_var", |input: &mut Input| {
-        let _ = '$'.parse_next(input)?;
-        let name = ident.cut().parse_next(input)?;
-        Ok(name)
-    })
-    .parse_next(input)
-}
-fn shell_var(input: &mut Input) -> ModalResult<String> {
-    trace("env_var", |input: &mut Input| {
-        let _ = '@'.parse_next(input)?;
-        let name = ident.cut().parse_next(input)?;
-        Ok(name)
-    })
-    .parse_next(input)
-}
-
 fn keyword<'a>(
     s: &'static str,
 ) -> impl Parser<Input<'a>, &'a str, winnow::error::ErrMode<ParseError>> {
@@ -374,16 +357,107 @@ fn keyword<'a>(
     )
     .map(|(s, _)| s)
 }
+
+fn unit(input: &mut Input) -> ModalResult<()> {
+    let begin = input.current_token_start();
+    let _ = '('.parse_next(input)?;
+    let end = input.previous_token_end();
+
+    let _ = space0.parse_next(input)?;
+
+    if input.is_empty() {
+        fail.map_err_at(|()| ExprError::UnclosedParen, begin..end)
+            .parse_next(input)?;
+    }
+    let _ = ')'
+        .map_err_at(|()| ExprError::UnclosedParen, begin..end)
+        .parse_next(input)?;
+
+    Ok(())
+}
+fn paren(input: &mut Input) -> ModalResult<Expr> {
+    let begin = input.current_token_start();
+    let _ = '('.parse_next(input)?;
+    let end = input.previous_token_end();
+
+    let _ = space0.parse_next(input)?;
+
+    let expr = expr.parse_next(input)?;
+
+    let _ = space0.parse_next(input)?;
+
+    if input.is_empty() {
+        fail.map_err_at(|()| ExprError::UnclosedParen, begin..end)
+            .parse_next(input)?;
+    }
+    let _ = ')'
+        .map_err_at(|()| ExprError::UnclosedParen, begin..end)
+        .parse_next(input)?;
+
+    Ok(expr)
+}
+fn subst(input: &mut Input) -> ModalResult<CommandLine> {
+    let begin = input.current_token_start();
+    let _ = "$(".parse_next(input)?;
+    let end = input.previous_token_end();
+
+    let _ = space0.parse_next(input)?;
+
+    let command_line = command_line.parse_next(input)?;
+
+    let _ = space0.parse_next(input)?;
+
+    if input.is_empty() {
+        fail.map_err_at(|()| ExprError::UnclosedCommandSubst, begin..end)
+            .parse_next(input)?;
+    }
+    let _ = ')'
+        .map_err_with_span(|()| ExprError::UnclosedCommandSubst)
+        .parse_next(input)?;
+
+    Ok(command_line)
+}
+fn array(input: &mut Input) -> ModalResult<Vec<Spanned<Expr>>> {
+    let begin = input.current_token_start();
+    let _ = '['.parse_next(input)?;
+    let end = input.previous_token_end();
+
+    let _ = space0.parse_next(input)?;
+
+    let array = separated(0.., expr.spanned(), delimited(space0, ',', space0))
+        .parse_next(input)?;
+
+    let _ = space0.parse_next(input)?;
+
+    if input.is_empty() {
+        fail.map_err_at(|()| ExprError::UnclosedBracket, begin..end)
+            .parse_next(input)?;
+    }
+    let _ = ']'
+        .map_err_with_span(|()| ExprError::UnclosedBracket)
+        .parse_next(input)?;
+
+    Ok(array)
+}
+fn env_var(input: &mut Input) -> ModalResult<String> {
+    trace("env_var", preceded('$', ident)).parse_next(input)
+}
+fn shell_var(input: &mut Input) -> ModalResult<String> {
+    trace("shell_var", preceded('@', ident)).parse_next(input)
+}
 fn special_var(input: &mut Input) -> ModalResult<SpecialVar> {
     trace(
         "special_var",
-        dispatch! {any;
-            '?' => empty.value(SpecialVar::ExitStatus),
-            '$' => empty.value(SpecialVar::Pid),
-            '!' => empty.value(SpecialVar::BackgroundPid),
-            '@' => empty.value(SpecialVar::ShellName),
-            _ => fail,
-        },
+        preceded(
+            '$',
+            dispatch! {any;
+                '?' => empty.value(SpecialVar::ExitStatus),
+                '$' => empty.value(SpecialVar::Pid),
+                '!' => empty.value(SpecialVar::BackgroundPid),
+                '@' => empty.value(SpecialVar::ShellName),
+                _ => fail,
+            },
+        ),
     )
     .parse_next(input)
 }

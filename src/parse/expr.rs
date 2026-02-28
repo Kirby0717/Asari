@@ -6,7 +6,7 @@ pub fn bin_int(input: &mut Input) -> ModalResult<i64> {
     trace(
         "bin_int",
         take_while(1.., '0'..='1').try_map_with_span(|s| {
-            i64::from_str_radix(s, 2).map_err(NumberError::InvalidBin)
+            i64::from_str_radix(s, 2).map_err(NumberError::Bin)
         }),
     )
     .cut()
@@ -16,7 +16,7 @@ pub fn oct_int(input: &mut Input) -> ModalResult<i64> {
     trace(
         "oct_int",
         take_while(1.., '0'..='7').try_map_with_span(|s| {
-            i64::from_str_radix(s, 8).map_err(NumberError::InvalidOct)
+            i64::from_str_radix(s, 8).map_err(NumberError::Oct)
         }),
     )
     .cut()
@@ -26,7 +26,7 @@ pub fn hex_int(input: &mut Input) -> ModalResult<i64> {
     trace(
         "hex_int",
         take_while(1.., ('0'..='9', 'A'..='F', 'a'..='f')).try_map_with_span(
-            |s| i64::from_str_radix(s, 16).map_err(NumberError::InvalidHex),
+            |s| i64::from_str_radix(s, 16).map_err(NumberError::Hex),
         ),
     )
     .cut()
@@ -46,18 +46,16 @@ pub fn dec_number(input: &mut Input) -> ModalResult<Primary> {
     if decimal_part.is_some() || exp_part.is_some() {
         let l = float_checkpoint.offset_from(&start);
         let float = trace("float", take(l))
-            .try_map_with_span(|s| {
-                s.parse::<f64>().map_err(NumberError::InvalidFloat)
-            })
+            .try_map_with_span(|s| s.parse::<f64>().map_err(NumberError::Float))
+            .cut()
             .parse_next(input)?;
         Ok(Primary::Float(float))
     }
     else {
         let l = int_checkpoint.offset_from(&start);
         let int = trace("dec_int", take(l))
-            .try_map_with_span(|s| {
-                s.parse::<i64>().map_err(NumberError::InvalidDec)
-            })
+            .try_map_with_span(|s| s.parse::<i64>().map_err(NumberError::Dec))
+            .cut()
             .parse_next(input)?;
         Ok(Primary::Int(int))
     }
@@ -81,30 +79,27 @@ pub fn expr_primary(input: &mut Input) -> ModalResult<Primary> {
         dispatch! {peek(any);
             '\'' => quoted_string.map(Primary::String),
             '"' => double_quoted_string.map(Primary::String),
-            '$' => preceded('$', alt((
-                delimited(('(', space0), command_line.spanned(), (space0, ')'))
-                    .map(|shell_command| Primary::CommandSubst(Box::new(shell_command))),
+            '$' => alt((
+                subst.spanned().map(|subst| Primary::CommandSubst(Box::new(subst))),
                 special_var.map(Primary::SpecialVar),
-                ident.cut().map(Primary::EnvVar),
-            ))),
-            '@' => preceded('@', ident).cut().map(Primary::ShellVar),
+                ident.map(Primary::EnvVar),
+            )).cut(),
+            '@' => shell_var.cut().map(Primary::ShellVar),
             '(' => alt((
-                ('(', space0, ')').value(Primary::Unit),
-                delimited(('(', space0), expr.spanned(), (space0, ')'))
-                    .map(|expr| Primary::Paren(Box::new(expr)))
-            )),
+                unit.value(Primary::Unit),
+                paren.spanned().map(|expr| Primary::Paren(Box::new(expr)))
+            )).cut(),
             'r' => raw_string.map(Primary::String),
             'p' => path_string.map(Primary::PathString),
-            '[' => delimited(('[', space0), separated(0.., expr.spanned(), delimited(space0, ',', space0)), ']')
-                .map(|exprs| {
-                    Primary::Array(exprs)
-                }),
+            '[' => array.cut().map(Primary::Array),
             't' => keyword("true").value(Primary::Bool(true)),
             'f' => keyword("false").value(Primary::Bool(false)),
             '0'..='9' => number,
             'n' => keyword("none").value(Primary::Option(None)),
-            's' => delimited((keyword("some"), space0, '(', space0), expr.spanned(), (space0, ')'))
-                .map(|expr| Primary::Option(Some(Box::new(expr)))),
+            's' => preceded(
+                keyword("some"),
+                paren.spanned().map(|expr| Primary::Option(Some(Box::new(expr)))),
+            ).cut(),
             _ => fail,
         },
     )
@@ -196,22 +191,6 @@ pub fn ast_type(input: &mut Input) -> ModalResult<AstType> {
         }
     })
     .parse_next(input)
-    /*trace(
-        "expr_type",
-        dispatch! {type_name;
-            "string" => empty.value(String),
-            "int" => empty.value(Int),
-            "float" => empty.value(Float),
-            "bool" => empty.value(Bool),
-            "array" => delimited((space0, '<', space0), expr_type, (space0, '>', space0))
-                .map(|t| Array(Box::new(t))),
-            "option" => delimited((space0, '<', space0), expr_type, (space0, '>', space0))
-                .map(|t| Option(Box::new(t))),
-            "unit" => empty.value(Unit),
-            _ => fail,
-        },
-    )
-    .parse_next(input)*/
 }
 pub fn expr(input: &mut Input) -> ModalResult<Expr> {
     trace("expr", |input: &mut Input| {
@@ -255,7 +234,13 @@ fn expr_pratt(input: &mut Input, min_power: i32) -> ModalResult<Spanned<Expr>> {
                 break;
             }
             let _ = space0.parse_next(input)?;
-            let rhs = expr_pratt(input, r_power)?;
+            let cursor = input.current_token_start();
+            let rhs = expr_pratt(input, r_power).map_err(|_| {
+                winnow::error::ErrMode::Cut(ParseError {
+                    kind: ParseErrorKind::Expr(ExprError::NoRhs),
+                    span: cursor..cursor + 1,
+                })
+            })?;
             lhs = infix.apply(lhs, rhs);
             continue;
         }
