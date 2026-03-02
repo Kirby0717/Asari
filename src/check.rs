@@ -20,7 +20,7 @@ pub fn check_command_line(
     errors: &mut Vec<CheckError>,
 ) {
     for statement in &command_line.statements {
-        check_statement(statement, errors);
+        check_statement(statement.as_ref(), errors);
     }
 }
 fn check_statement(statement: &Statement, errors: &mut Vec<CheckError>) {
@@ -46,7 +46,7 @@ fn check_pipline(pipeline: &Pipeline, errors: &mut Vec<CheckError>) {
     let pipeline = &pipeline;
     // 最初
     check_fd_count(
-        &pipeline.first,
+        pipeline.first.as_ref(),
         None,
         pipeline.rest.first().map(|(pipe, _)| pipe.as_ref()),
         errors,
@@ -54,11 +54,16 @@ fn check_pipline(pipeline: &Pipeline, errors: &mut Vec<CheckError>) {
     // 最後を除く2番目以降
     let iter = pipeline.rest.iter().zip(pipeline.rest.iter().skip(1));
     for ((pre_pipe, command), (post_pipe, _)) in iter {
-        check_fd_count(command, Some(pre_pipe), Some(post_pipe), errors);
+        check_fd_count(
+            command.as_ref(),
+            Some(pre_pipe.as_ref()),
+            Some(post_pipe.as_ref()),
+            errors,
+        );
     }
     // 最後
     if let Some((pre_pipe, command)) = pipeline.rest.last() {
-        check_fd_count(command, Some(pre_pipe), None, errors);
+        check_fd_count(command.as_ref(), Some(pre_pipe.as_ref()), None, errors);
     }
 }
 
@@ -83,7 +88,7 @@ fn check_fd_count(
                     count[2] += 1;
                 }
             },
-            Redirect::Merge(merge) => match merge {
+            Redirect::Merge(merge) => match merge.as_ref() {
                 MergeRedirect::StdoutToStderr => count[1] += 1,
                 MergeRedirect::StderrToStdout => count[2] += 1,
             },

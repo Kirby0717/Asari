@@ -35,12 +35,7 @@ fn run_subst_mode<P: AsRef<Path>>(payload_path: P) -> ! {
             std::process::exit(1)
         }
     };
-    if let Err(e) = runtime::exec::execute_command_line(
-        &payload.command,
-        &mut payload.context,
-    ) {
-        eprintln!("{e}");
-    }
+    runtime::exec::execute_command_line(&payload.command, &mut payload.context);
     std::process::exit(payload.context.last_status)
 }
 
@@ -58,6 +53,7 @@ fn run_shell_mode() -> anyhow::Result<()> {
             Ok(_len) => {
                 // 解析
                 let line = line.trim_end_matches(['\n', '\r']);
+                shell.set_input(line);
                 let parsed = parse::parse_shell_command(line);
                 let command = match parsed {
                     Ok(command) => command,
@@ -79,14 +75,7 @@ fn run_shell_mode() -> anyhow::Result<()> {
                 }
 
                 // 実行
-                if let Err(e) = shell.execute(&command) {
-                    if let Some(code) = e.is_exit() {
-                        std::process::exit(code);
-                    }
-                    else {
-                        eprintln!("コマンドの実行に失敗しました : {e}");
-                    }
-                }
+                shell.execute(&command);
             }
             Err(e) => {
                 eprintln!("入力の取得に失敗しました : {e}");

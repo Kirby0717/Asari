@@ -1,15 +1,17 @@
 use super::subst::Error as SubstError;
-use super::{Context, Type, Value};
+use super::{Context, SpannedError, Type, Value};
 use crate::parse::{
     AstType, CommandPart, Expr, ExprInfix, ExprPostfix, ExprPrefix, Primary,
-    SpecialVar,
+    Span, Spanned, SpecialVar,
 };
+use crate::runtime::WithSpan;
 
 use std::fmt::Display;
 use std::path::{Component, Path, PathBuf};
 use std::string::String;
 
 type Result<T> = ::std::result::Result<T, Error>;
+type SpannedResult<T> = ::std::result::Result<T, SpannedError<Error>>;
 #[derive(Debug)]
 pub enum Error {
     Subst(SubstError),
@@ -48,23 +50,151 @@ impl From<SubstError> for Error {
 }
 
 pub fn eval_command_part(
-    command_part: &CommandPart,
+    Spanned {
+        span,
+        inner: command_part,
+    }: &Spanned<CommandPart>,
     env: &mut Context,
-) -> Result<Value> {
+) -> SpannedResult<Value> {
     Ok(match command_part {
-        CommandPart::Unquoted(string) => tilde_expand(string)?.into(),
+        CommandPart::Unquoted(string) => {
+            tilde_expand(&string).with_span(span)?.into()
+        }
         CommandPart::SimpleExpr(expr) => eval_expr(expr, env)?,
     })
 }
-pub fn eval_expr(expr: &Expr, env: &mut Context) -> Result<Value> {
+pub fn eval_expr(
+    Spanned { span, inner: expr }: &Spanned<Expr>,
+    env: &mut Context,
+) -> SpannedResult<Value> {
     use Expr::*;
     Ok(match expr {
         Primary(primary) => eval_primary(primary, env)?,
-        Prefix(expr, prefix) => eval_prefix(expr, prefix, env)?,
-        Infix(expr1, expr2, infix) => eval_infix(expr1, expr2, infix, env)?,
-        Postfix(expr, postfix) => eval_postfix(expr, postfix, env)?,
+        Prefix(expr, prefix) => {
+            let value = eval_expr(expr, env)?;
+            apply_prefix(value, prefix).with_span(span)?
+        }
+        Infix(expr1, expr2, infix) => {
+            use ExprInfix::*;
+            if matches!(infix, And | Or | UnwrapOr) {
+                eval_infix_lazy(span, expr1, expr2, infix, env)?
+            }
+            else {
+                let value1 = eval_expr(expr1, env)?;
+                let value2 = eval_expr(expr2, env)?;
+                apply_infix(value1, value2, infix).with_span(span)?
+            }
+        }
+        Postfix(expr, postfix) => {
+            let value = eval_expr(expr, env)?;
+            apply_postfix(value, postfix).with_span(span)?
+        }
+        Index(expr_v, expr_i) => {
+            let value = eval_expr(expr_v, env)?;
+            let index = eval_expr(expr_i, env)?;
+            apply_index(value, index).with_span(span)?
+        }
+        Cast(expr, ast_type) => {
+            let value = eval_expr(expr, env)?;
+            let r#type = eval_ast_type(ast_type)?;
+            apply_cast(value, r#type).with_span(span)?
+        }
     })
 }
+fn eval_primary(
+    Spanned {
+        span,
+        inner: primary,
+    }: &Spanned<Primary>,
+    env: &mut Context,
+) -> SpannedResult<Value> {
+    use Primary::*;
+    Ok(match primary {
+        String(str) => str.clone().into(),
+        PathString(str) => resolve_path_string(str, env).with_span(span)?,
+        SpecialVar(special_var) => {
+            resolve_special_var(special_var, env).with_span(span)?
+        }
+        EnvVar(env_var) => std::env::var(env_var).ok().into(),
+        ShellVar(shell_var) => env
+            .shell_vars
+            .get(shell_var)
+            .ok_or(Error::UnknownShellVar(shell_var.to_string()))
+            .with_span(span)?
+            .clone(),
+        Paren(expr) => eval_expr(expr, env)?,
+        Array(array) => array
+            .iter()
+            .map(|expr| eval_expr(expr, env))
+            .collect::<SpannedResult<Vec<_>>>()?
+            .into(),
+        Bool(bool) => (*bool).into(),
+        Int(int) => (*int).into(),
+        Float(float) => (*float).into(),
+        Option(option) => option
+            .as_ref()
+            .map(|expr| eval_expr(expr, env))
+            .transpose()?
+            .into(),
+        Unit => ().into(),
+        CommandSubst(shell_command) => {
+            use super::subst::{SubstPayload, execute_substitution};
+
+            let payload = SubstPayload {
+                command: shell_command.clone().into_inner(),
+                context: env.clone(),
+            };
+            execute_substitution(&payload, env).with_span(span)?.into()
+        }
+    })
+}
+fn eval_infix_lazy(
+    span: &Span,
+    expr1: &Spanned<Expr>,
+    expr2: &Spanned<Expr>,
+    infix: &ExprInfix,
+    env: &mut Context,
+) -> SpannedResult<Value> {
+    let value1 = eval_expr(expr1, env)?;
+    use ExprInfix::*;
+    use Value::*;
+    Ok(match (value1, infix) {
+        (Bool(false), And) => false.into(),
+        (Bool(true), And) => eval_expr(expr2, env)?,
+        (Bool(true), Or) => true.into(),
+        (Bool(false), Or) => eval_expr(expr2, env)?,
+        (Option(Some(v)), UnwrapOr) => *v,
+        (Option(None), UnwrapOr) => eval_expr(expr2, env)?,
+        _ => {
+            return Err(Error::TypeMismatch).with_span(span);
+        }
+    })
+}
+fn eval_ast_type(
+    Spanned {
+        span,
+        inner: ast_type,
+    }: &Spanned<AstType>,
+) -> SpannedResult<Type> {
+    use AstType::*;
+    Ok(match ast_type {
+        Unknown => Type::Unknown,
+        Normal(name) => match name.as_str() {
+            "string" => Type::String,
+            "int" => Type::Int,
+            "float" => Type::Float,
+            "bool" => Type::Bool,
+            "unit" => Type::Unit,
+            _ => return Err(Error::UnknownType(name.clone())).with_span(span),
+        },
+        Generics(name, t) => match name.as_str() {
+            "array" => Type::Array(Box::new(eval_ast_type(t)?)),
+            "option" => Type::Option(Box::new(eval_ast_type(t)?)),
+            _ => return Err(Error::UnknownType(name.clone())).with_span(span),
+        },
+    })
+}
+
 /*
 
 match_op { 値;
@@ -132,12 +262,7 @@ macro_rules! checked_infix {
     };
 }
 
-fn eval_prefix(
-    expr: &Expr,
-    prefix: &ExprPrefix,
-    env: &mut Context,
-) -> Result<Value> {
-    let value = eval_expr(expr, env)?;
+fn apply_prefix(value: Value, prefix: &ExprPrefix) -> Result<Value> {
     use ExprPrefix::*;
     use Value::*;
     match_op! {(value, prefix);
@@ -152,14 +277,11 @@ fn eval_prefix(
         _ => return Err(Error::TypeMismatch),
     }
 }
-fn eval_infix(
-    expr1: &Expr,
-    expr2: &Expr,
+fn apply_infix(
+    value1: Value,
+    value2: Value,
     infix: &ExprInfix,
-    env: &mut Context,
 ) -> Result<Value> {
-    let value1 = eval_expr(expr1, env)?;
-    let value2 = eval_expr(expr2, env)?;
     use ExprInfix::*;
     use Value::*;
     match_op! { (value1, value2, infix);
@@ -177,7 +299,7 @@ fn eval_infix(
                 Equal ==, NotEqual !=,
                 Less <, LessEqual <=, Greater >, GreaterEqual >=,
             }
-            [ Bool(a, b)     ] { Equal ==, NotEqual !=, And &&, Or || }
+            [ Bool(a, b)     ] { Equal ==, NotEqual != }
             [ Array(v1, v2)  ] { Equal ==, NotEqual != }
             [ Option(o1, o2) ] { Equal ==, NotEqual != }
         }
@@ -192,16 +314,10 @@ fn eval_infix(
         }
         @extra:
         (String(a), String(b), Add) => (a + &b).into(),
-        (Option(a), b, UnwrapOr) => *a.unwrap_or(Box::new(b)),
         _ => return Err(Error::TypeMismatch),
     }
 }
-fn eval_postfix(
-    expr: &Expr,
-    postfix: &ExprPostfix,
-    env: &mut Context,
-) -> Result<Value> {
-    let value = eval_expr(expr, env)?;
+fn apply_postfix(value: Value, postfix: &ExprPostfix) -> Result<Value> {
     use ExprPostfix::*;
     use Value::*;
     fn usize_into_value(i: usize) -> Result<Value> {
@@ -219,70 +335,11 @@ fn eval_postfix(
         (Option(a), IsSome) => a.is_some().into(),
         (String(s), Length) => usize_into_value(s.chars().count())?,
         (Array(v), Length) => usize_into_value(v.len())?,
-        (Array(v), Index(index)) => {
-            let index = eval_expr(index, env)?;
-            let Int(index) = index
-            else {
-                return Err(Error::TypeMismatch);
-            };
-            let index = if index >= 0 {
-                // 正
-                usize::try_from(index).ok()
-            }
-            else {
-                // 負
-                if let Ok(index) = isize::try_from(index) {
-                    v.len().checked_add_signed(index)
-                }
-                else {
-                    None
-                }
-            };
-            index.and_then(|index| v.get(index).cloned()).into()
-        }
-        (v, Cast(t)) => eval_cast(&v, &eval_ast_type(t)?)?,
         _ => return Err(Error::TypeMismatch),
     })
 }
-fn eval_primary(primary: &Primary, env: &mut Context) -> Result<Value> {
-    use Primary::*;
-    Ok(match primary {
-        String(str) => str.clone().into(),
-        PathString(str) => eval_path_string(str, env)?,
-        SpecialVar(special_var) => eval_special_var(special_var, env)?,
-        EnvVar(env_var) => std::env::var(env_var).ok().into(),
-        ShellVar(shell_var) => env
-            .shell_vars
-            .get(shell_var)
-            .ok_or(Error::UnknownShellVar(shell_var.to_string()))?
-            .clone(),
-        Paren(expr) => eval_expr(expr, env)?,
-        Array(array) => array
-            .iter()
-            .map(|expr| eval_expr(expr, env))
-            .collect::<Result<Vec<_>>>()?
-            .into(),
-        Bool(bool) => (*bool).into(),
-        Int(int) => (*int).into(),
-        Float(float) => (*float).into(),
-        Option(option) => option
-            .as_ref()
-            .map(|expr| eval_expr(expr, env))
-            .transpose()?
-            .into(),
-        Unit => ().into(),
-        CommandSubst(shell_command) => {
-            use super::subst::{SubstPayload, execute_substitution};
 
-            let payload = SubstPayload {
-                command: shell_command.clone().into_inner(),
-                context: env.clone(),
-            };
-            execute_substitution(&payload, env)?.into()
-        }
-    })
-}
-fn eval_special_var(
+fn resolve_special_var(
     special_var: &SpecialVar,
     env: &mut Context,
 ) -> Result<Value> {
@@ -294,26 +351,31 @@ fn eval_special_var(
         ShellName => env.shell_name.clone().into(),
     })
 }
-fn eval_ast_type(ast_type: &AstType) -> Result<Type> {
-    use AstType::*;
-    Ok(match ast_type {
-        Unknown => Type::Unknown,
-        Normal(name) => match name.as_str() {
-            "string" => Type::String,
-            "int" => Type::Int,
-            "float" => Type::Float,
-            "bool" => Type::Bool,
-            "unit" => Type::Unit,
-            _ => return Err(Error::UnknownType(name.clone())),
-        },
-        Generics(name, t) => match name.as_str() {
-            "array" => Type::Array(Box::new(eval_ast_type(t)?)),
-            "option" => Type::Option(Box::new(eval_ast_type(t)?)),
-            _ => return Err(Error::UnknownType(name.clone())),
-        },
-    })
+fn apply_index(value: Value, index: Value) -> Result<Value> {
+    use Value::*;
+    if let Array(v) = value
+        && let Int(index) = index
+    {
+        let index = if index >= 0 {
+            // 正
+            usize::try_from(index).ok()
+        }
+        else {
+            // 負
+            if let Ok(index) = isize::try_from(index) {
+                v.len().checked_sub_signed(index)
+            }
+            else {
+                None
+            }
+        };
+        Ok(index.and_then(|index| v.get(index).cloned()).into())
+    }
+    else {
+        Err(Error::TypeMismatch).into()
+    }
 }
-fn eval_cast(value: &Value, r#type: &Type) -> Result<Value> {
+fn apply_cast(value: Value, r#type: Type) -> Result<Value> {
     use Error::FailCast;
     use Value::*;
     Ok(match (value, r#type) {
@@ -331,33 +393,33 @@ fn eval_cast(value: &Value, r#type: &Type) -> Result<Value> {
         }
         .into(),
         (Int(a), Type::String) => a.to_string().into(),
-        (Int(a), Type::Int) => (*a).into(),
-        (Int(a), Type::Float) => ((*a) as f64).into(),
+        (Int(a), Type::Int) => a.into(),
+        (Int(a), Type::Float) => (a as f64).into(),
         (Float(a), Type::String) => a.to_string().into(),
         (Float(a), Type::Int) => {
             if a.is_finite() {
-                ((*a) as i64).into()
+                (a as i64).into()
             }
             else {
                 return Err(FailCast);
             }
         }
-        (Float(a), Type::Float) => (*a).into(),
+        (Float(a), Type::Float) => a.into(),
         (Bool(a), Type::String) => a.to_string().into(),
-        (Bool(a), Type::Bool) => (*a).into(),
+        (Bool(a), Type::Bool) => a.into(),
         (Array(v), Type::Array(t)) => v
-            .iter()
-            .map(|v| eval_cast(v, t))
+            .into_iter()
+            .map(|v| apply_cast(v, *t.clone()))
             .collect::<Result<Vec<_>>>()?
             .into(),
         (Option(o), Type::Option(t)) => {
-            o.as_ref().map(|v| eval_cast(v, t)).transpose()?.into()
+            o.map(|v| apply_cast(*v, *t)).transpose()?.into()
         }
         (Unit, Type::Unit) => ().into(),
         _ => return Err(FailCast),
     })
 }
-fn eval_path_string(path_string: &str, _env: &mut Context) -> Result<Value> {
+fn resolve_path_string(path_string: &str, _env: &mut Context) -> Result<Value> {
     if path_string.is_empty() {
         return Ok(Vec::<String>::new().into());
     }

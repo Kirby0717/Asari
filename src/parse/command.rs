@@ -28,18 +28,17 @@ pub fn statement(input: &mut Input) -> ModalResult<Statement> {
     trace(
         "statement",
         alt((
-            shell_command.spanned().map(ShellCommand),
-            env_assign.spanned().map(EnvAssign),
-            pipeline.spanned().map(Pipeline),
-        ))
-        .cut(),
+            shell_command.map(ShellCommand),
+            env_assign.map(EnvAssign),
+            pipeline.map(Pipeline),
+        )),
     )
     .parse_next(input)
 }
 pub fn shell_command(input: &mut Input) -> ModalResult<ShellCommand> {
     use CommandError::*;
     trace("shell_command", |input: &mut Input| {
-        let kind = shell_command_kind.spanned().parse_next(input)?;
+        let kind = shell_command_kind.parse_next(input)?;
         let args = repeat(
             0..,
             preceded(space0, |input: &mut Input| {
@@ -167,7 +166,7 @@ pub fn command_part(input: &mut Input) -> ModalResult<CommandPart> {
         "command_part",
         alt((
             simple_expr.spanned().map(SimpleExpr),
-            unquoted_string.spanned().map(Unquoted),
+            unquoted_string.map(Unquoted),
         )),
     )
     .parse_next(input)
@@ -177,7 +176,7 @@ pub fn redirect(input: &mut Input) -> ModalResult<Redirect> {
     trace(
         "redirect",
         alt((
-            merge_redirect.map(Merge),
+            merge_redirect.spanned().map(Merge),
             input_redirect.map(Input),
             output_redirect.map(Output),
         )),

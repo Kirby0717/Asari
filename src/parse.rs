@@ -26,38 +26,33 @@ use winnow::{
 };
 
 pub type Input<'i> = LocatingSlice<&'i str>;
-type Span = std::ops::Range<usize>;
+pub type Span = std::ops::Range<usize>;
 
 fn mix_span(a: &Span, b: &Span) -> Span {
     a.start.min(b.start)..a.end.max(b.end)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(transparent)]
 pub struct Spanned<T> {
-    inner: T,
-    #[serde(skip)]
-    span: Span,
+    pub span: Span,
+    pub inner: T,
 }
 impl<T> Spanned<T> {
+    pub fn new(span: Span, inner: T) -> Self {
+        Self { span, inner }
+    }
     pub fn into_inner(self) -> T {
         self.inner
     }
     pub fn _map<U, F: FnOnce(T) -> U>(self, f: F) -> Spanned<U> {
         Spanned {
-            inner: f(self.inner),
             span: self.span,
+            inner: f(self.inner),
         }
     }
 }
 impl<T> AsRef<T> for Spanned<T> {
     fn as_ref(&self) -> &T {
-        &self.inner
-    }
-}
-impl<T> std::ops::Deref for Spanned<T> {
-    type Target = T;
-    fn deref(&self) -> &Self::Target {
         &self.inner
     }
 }
@@ -86,13 +81,13 @@ pub struct CommandLine {
 }
 #[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum Statement {
-    ShellCommand(Spanned<ShellCommand>),
-    Pipeline(Spanned<Pipeline>),
-    EnvAssign(Spanned<EnvAssign>),
+    ShellCommand(ShellCommand),
+    Pipeline(Pipeline),
+    EnvAssign(EnvAssign),
 }
 #[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct ShellCommand {
-    pub kind: Spanned<ShellCommandKind>,
+    pub kind: ShellCommandKind,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<Spanned<CommandPart>>,
 }
@@ -126,7 +121,7 @@ pub struct Command {
 pub enum Redirect {
     Input(InputRedirect),
     Output(((OutputRedirect, OutputMode), Spanned<CommandPart>)),
-    Merge(MergeRedirect),
+    Merge(Spanned<MergeRedirect>),
 }
 #[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum InputRedirect {
@@ -153,7 +148,7 @@ pub enum MergeRedirect {
 }
 #[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum CommandPart {
-    Unquoted(Spanned<String>),
+    Unquoted(String),
     SimpleExpr(Spanned<Expr>),
 }
 #[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -173,10 +168,10 @@ impl ExprPrefix {
 impl Spanned<ExprPrefix> {
     fn apply(self, expr: Spanned<Expr>) -> Spanned<Expr> {
         let expr = Box::new(expr);
-        Spanned {
-            span: mix_span(&self.span, &expr.span),
-            inner: Expr::Prefix(expr, self.inner),
-        }
+        Spanned::new(
+            mix_span(&self.span, &expr.span),
+            Expr::Prefix(expr, self.inner),
+        )
     }
 }
 #[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -228,20 +223,18 @@ impl Spanned<ExprInfix> {
     ) -> Spanned<Expr> {
         let l_expr = Box::new(l_expr);
         let r_expr = Box::new(r_expr);
-        Spanned {
-            span: mix_span(&l_expr.span, &r_expr.span),
-            inner: Expr::Infix(l_expr, r_expr, self.inner),
-        }
+        Spanned::new(
+            mix_span(&l_expr.span, &r_expr.span),
+            Expr::Infix(l_expr, r_expr, self.inner),
+        )
     }
 }
 type ExprNode = Box<Spanned<Expr>>;
 #[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum ExprPostfix {
-    Unwrap,                 // !
-    IsSome,                 // ?
-    Length,                 // @
-    Index(ExprNode),        // [expr]
-    Cast(Spanned<AstType>), // as type
+    Unwrap, // !
+    IsSome, // ?
+    Length, // @
 }
 impl ExprPostfix {
     fn power(&self) -> i32 {
@@ -250,18 +243,18 @@ impl ExprPostfix {
             Unwrap => 10,
             IsSome => 10,
             Length => 10,
-            Index(_) => 10,
-            Cast(_) => 9,
         }
     }
 }
+const INDEX_POWER: i32 = 10;
+const CAST_POWER: i32 = 9;
 impl Spanned<ExprPostfix> {
     fn apply(self, expr: Spanned<Expr>) -> Spanned<Expr> {
         let expr = Box::new(expr);
-        Spanned {
-            span: mix_span(&expr.span, &self.span),
-            inner: Expr::Postfix(expr, self.inner),
-        }
+        Spanned::new(
+            mix_span(&expr.span, &self.span),
+            Expr::Postfix(expr, self.inner),
+        )
     }
 }
 #[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -270,6 +263,8 @@ pub enum Expr {
     Prefix(ExprNode, ExprPrefix),
     Infix(ExprNode, ExprNode, ExprInfix),
     Postfix(ExprNode, ExprPostfix),
+    Index(ExprNode, ExprNode),        // [expr]
+    Cast(ExprNode, Spanned<AstType>), // as type
 }
 #[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum Primary {
@@ -289,9 +284,9 @@ pub enum Primary {
 }
 #[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum AstType {
-    Unknown,                        // _
-    Normal(String),                 // int float bool string ...
-    Generics(String, Box<AstType>), // array option ...
+    Unknown,                                 // _
+    Normal(String),                          // int float bool string ...
+    Generics(String, Box<Spanned<AstType>>), // array option ...
 }
 #[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum SpecialVar {

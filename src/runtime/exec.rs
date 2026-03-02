@@ -1,10 +1,11 @@
 use super::eval::{Error as EvalError, eval_command_part, eval_expr};
 use super::shell_command::Error as ShellCommandError;
-use super::{Context, Value, status_into_i32};
+use super::{Context, SpannedError, Value, status_into_i32};
 use crate::parse::{
-    Command, CommandLine, CommandPart, InputRedirect, MergeRedirect,
-    OutputMode, OutputRedirect, Pipe, Pipeline, Redirect, Statement,
+    Command, CommandLine, InputRedirect, MergeRedirect, OutputMode,
+    OutputRedirect, Pipe, Pipeline, Redirect, Span, Spanned, Statement,
 };
+use crate::runtime::WithSpan;
 
 use std::fmt::Display;
 use std::io::Write;
@@ -13,6 +14,7 @@ use std::thread::JoinHandle;
 use std::{ffi::OsString, io::Error as IoError, path::PathBuf};
 
 type Result<T> = ::std::result::Result<T, Error>;
+type SpannedResult<T> = ::std::result::Result<T, SpannedError<Error>>;
 #[derive(Debug)]
 pub enum Error {
     Eval(EvalError),
@@ -110,37 +112,47 @@ pub fn value_to_args(value: &Value) -> Vec<String> {
     }
 }
 
-pub fn execute_command_line(
-    command_line: &CommandLine,
-    env: &mut Context,
-) -> Result<()> {
+pub fn execute_command_line(command_line: &CommandLine, env: &mut Context) {
     for statement in &command_line.statements {
-        execute_statement(statement, env)?;
+        // Exit以外のエラーは無視してエラー出力のみ行う
+        match execute_statement(statement, env) {
+            Err(e) => {
+                if let Some(code) = e.kind.is_exit() {
+                    std::process::exit(code);
+                }
+                else {
+                    let display = e.display(&env.current_input);
+                    eprintln!("{display}");
+                }
+            }
+            Ok(_) => {}
+        }
     }
-    Ok(())
 }
 
-fn execute_statement(statement: &Statement, env: &mut Context) -> Result<()> {
+fn execute_statement(
+    Spanned {
+        span,
+        inner: statement,
+    }: &Spanned<Statement>,
+    env: &mut Context,
+) -> SpannedResult<()> {
     use Statement::*;
     match statement {
         ShellCommand(shell_command) => {
-            let command = shell_command.kind.clone();
+            let command = shell_command.kind;
             let args = shell_command
                 .args
                 .iter()
                 .map(|arg| eval_command_part(arg, env))
                 .collect::<std::result::Result<Vec<_>, _>>()?;
-            env.last_status = super::shell_command::run(&command, &args)?;
+            env.last_status =
+                super::shell_command::run(&command, &args).with_span(span)?;
         }
-        Pipeline(pipeline) => {
-            // エラーは無視してエラー出力のみ行う
-            if let Err(e) = execute_pipeline(pipeline, env) {
-                eprintln!("TODO:コマンドの場所付きのエラーにする");
-                eprintln!("{e}");
-            }
-        }
+        Pipeline(pipeline) => execute_pipeline(pipeline, env)?,
         EnvAssign(env_assign) => {
             let name = &env_assign.name;
+            let value_span = env_assign.value.span.clone();
             let value = eval_expr(&env_assign.value, env)?;
             match value {
                 Value::String(value) => {
@@ -162,7 +174,8 @@ fn execute_statement(statement: &Statement, env: &mut Context) -> Result<()> {
                     unsafe { std::env::remove_var(name.as_ref()) };
                 }
                 _ => {
-                    return Err(Error::InvalidEnvValueType);
+                    return Err(Error::InvalidEnvValueType)
+                        .with_span(&value_span);
                 }
             }
         }
@@ -170,12 +183,17 @@ fn execute_statement(statement: &Statement, env: &mut Context) -> Result<()> {
     Ok(())
 }
 
-fn execute_pipeline(pipeline: &Pipeline, env: &mut Context) -> Result<()> {
+fn execute_pipeline(
+    pipeline: &Pipeline,
+    env: &mut Context,
+) -> SpannedResult<()> {
     // ゾンビプロセス対策用の構造体
-    struct DropKillChild(std::process::Child);
+    struct DropKillChild(std::process::Child, Span);
     impl DropKillChild {
-        fn wait(&mut self) -> Result<i32> {
-            Ok(status_into_i32(self.0.wait().map_err(Error::Spawn)?))
+        fn wait(&mut self) -> SpannedResult<i32> {
+            Ok(status_into_i32(
+                self.0.wait().map_err(Error::Spawn).with_span(&self.1)?,
+            ))
         }
     }
     impl Drop for DropKillChild {
@@ -192,13 +210,17 @@ fn execute_pipeline(pipeline: &Pipeline, env: &mut Context) -> Result<()> {
     let mut string_handles = vec![];
     for resolved_command in resolved_commands {
         // 整理されたコマンドを分解
-        let ResolvedCommand {
-            name: command,
-            envs,
-            args,
-            stdin,
-            stdout,
-            stderr,
+        let Spanned {
+            span: command_span,
+            inner:
+                ResolvedCommand {
+                    name: command,
+                    envs,
+                    args,
+                    stdin,
+                    stdout,
+                    stderr,
+                },
         } = resolved_command;
 
         // 引数の展開
@@ -220,8 +242,9 @@ fn execute_pipeline(pipeline: &Pipeline, env: &mut Context) -> Result<()> {
             .stdout(stdout)
             .stderr(stderr)
             .spawn()
-            .map(DropKillChild)
-            .map_err(Error::Spawn)?;
+            .map(|child| DropKillChild(child, command_span.clone()))
+            .map_err(Error::Spawn)
+            .with_span(&command_span)?;
         command_handles.push(external_handle);
     }
 
@@ -243,19 +266,20 @@ struct ResolvedCommand {
     stderr: StdioOutputConfig,
 }
 impl ResolvedCommand {
-    fn new(command: &Command, env: &mut Context) -> Result<Self> {
+    fn new(command: &Command, env: &mut Context) -> SpannedResult<Self> {
         // コマンド名の評価
+        let name_span = command.name.span.clone();
         let name = eval_command_part(&command.name, env)?;
         let Value::String(name) = name
         else {
-            return Err(Error::InvalidCommandNameType);
+            return Err(Error::InvalidCommandNameType).with_span(&name_span);
         };
         if name.is_empty() {
-            return Err(Error::EmptyCommand);
+            return Err(Error::EmptyCommand).with_span(&name_span);
         }
         let Some(name) = find_executable(&name)
         else {
-            return Err(Error::NotFoundCommand(name));
+            return Err(Error::NotFoundCommand(name)).with_span(&name_span);
         };
 
         // 一時環境変数の評価
@@ -264,13 +288,15 @@ impl ResolvedCommand {
             .iter()
             .map(|temp_env| {
                 let (env_var, env_val) = temp_env.as_ref();
+                let span = env_val.span.clone();
                 let Value::String(env_val) = eval_expr(env_val, env)?
                 else {
-                    return Err(Error::InvalidTempEnvValueType);
+                    return Err(Error::InvalidTempEnvValueType)
+                        .with_span(&span);
                 };
                 Ok((env_var.as_ref().clone(), env_val))
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<SpannedResult<Vec<_>>>()?;
 
         // 引数の評価
         let args = command
@@ -293,20 +319,20 @@ impl ResolvedCommand {
 enum StdioInputConfig {
     #[default]
     Inherit,
-    String(String),
+    String(String, Span),
     File(std::fs::File),
     PipeReader(std::io::PipeReader),
 }
 impl StdioInputConfig {
     fn into_stdio(
         self,
-    ) -> Result<(Stdio, Option<JoinHandle<std::io::Result<()>>>)> {
+    ) -> SpannedResult<(Stdio, Option<JoinHandle<std::io::Result<()>>>)> {
         use StdioInputConfig::*;
         Ok(match self {
             Inherit => (Stdio::inherit(), None),
-            String(s) => {
+            String(s, span) => {
                 let (reader, mut writer) =
-                    std::io::pipe().map_err(Error::Pipe)?;
+                    std::io::pipe().map_err(Error::Pipe).with_span(&span)?;
                 let handle =
                     std::thread::spawn(move || writer.write_all(s.as_bytes()));
                 (reader.into(), Some(handle))
@@ -349,66 +375,116 @@ impl StdioOutputConfig {
 fn resolve_pipeline(
     pipeline: &Pipeline,
     env: &mut Context,
-) -> Result<Vec<ResolvedCommand>> {
-    let Pipeline { first, rest } = &pipeline;
+) -> SpannedResult<Vec<Spanned<ResolvedCommand>>> {
+    let Pipeline {
+        first:
+            Spanned {
+                span: first_span,
+                inner: first,
+            },
+        rest,
+    } = &pipeline;
     let mut commands_with_redirects = vec![];
 
     // 初期設定
-    commands_with_redirects
-        .push((ResolvedCommand::new(first, env)?, first.redirects.clone()));
-    for (pipe, command) in rest {
+    commands_with_redirects.push((
+        Spanned::new(first_span.clone(), ResolvedCommand::new(first, env)?),
+        first.redirects.clone(),
+    ));
+    for (
+        pipe,
+        Spanned {
+            span,
+            inner: command,
+        },
+    ) in rest
+    {
         // パイプに対する左右のコマンドを取得
         let (left, _) = commands_with_redirects.last_mut().unwrap();
         let mut right = ResolvedCommand::new(command, env)?;
 
         // パイプの作成
-        let (reader, writer) = std::io::pipe().map_err(Error::Pipe)?;
+        let pipe_span = pipe.span.clone();
+        let (reader, writer) =
+            std::io::pipe().map_err(Error::Pipe).with_span(&pipe_span)?;
         let reader = StdioInputConfig::PipeReader(reader);
         let writer = StdioOutputConfig::PipeWriter(writer);
 
         // 種類ごとに設定
         if matches!(pipe.as_ref(), Pipe::StdoutStderr) {
-            left.stderr = writer.try_clone()?;
+            left.inner.stderr = writer.try_clone().with_span(&pipe_span)?;
         }
-        left.stdout = writer;
+        left.inner.stdout = writer;
         right.stdin = reader;
 
-        commands_with_redirects.push((right, command.redirects.clone()));
+        commands_with_redirects.push((
+            Spanned::new(span.clone(), right),
+            command.redirects.clone(),
+        ));
     }
 
     // リダイレクトの反映
     let mut commands = vec![];
-    for (mut command, redirects) in commands_with_redirects {
+    for (
+        Spanned {
+            span,
+            inner: mut command,
+        },
+        redirects,
+    ) in commands_with_redirects
+    {
         apply_redirect(&mut command, redirects, env)?;
-        commands.push(command);
+        commands.push(Spanned::new(span, command));
     }
 
     Ok(commands)
 }
 fn apply_redirect(
     resolved_command: &mut ResolvedCommand,
-    redirects: Vec<crate::parse::Spanned<Redirect>>,
+    redirects: Vec<Spanned<Redirect>>,
     env: &mut Context,
-) -> Result<()> {
-    for redirect in redirects {
-        match redirect.as_ref() {
+) -> SpannedResult<()> {
+    for Spanned {
+        span: redirect_span,
+        inner: redirect,
+    } in redirects
+    {
+        match redirect {
             Redirect::Input(input_redirect) => {
-                apply_input_redirect(resolved_command, input_redirect, env)?;
+                apply_input_redirect(
+                    resolved_command,
+                    input_redirect,
+                    &redirect_span,
+                    env,
+                )?;
             }
             Redirect::Output((
                 (output_redirect, output_mode),
                 file_expression,
             )) => {
+                // ファイル名の評価
+                let file_path_span = file_expression.span.clone();
+                let value = eval_command_part(&file_expression, env)?;
+                let Value::String(file_path) = value
+                else {
+                    return Err(RedirectError::InvalidFileNameType.into())
+                        .with_span(&file_path_span);
+                };
+
                 apply_output_redirect(
                     resolved_command,
                     output_redirect,
                     output_mode,
-                    file_expression,
-                    env,
-                )?;
+                    &file_path,
+                )
+                .with_span(&file_path_span)?;
             }
-            Redirect::Merge(merge_redirect) => {
-                apply_merge_redirect(resolved_command, merge_redirect)?;
+            Redirect::Merge(Spanned {
+                span,
+                inner: merge_redirect,
+            }) => {
+                apply_merge_redirect(resolved_command, merge_redirect)
+                    .with_span(&span)?;
             }
         }
     }
@@ -416,39 +492,48 @@ fn apply_redirect(
 }
 fn apply_input_redirect(
     resolved_command: &mut ResolvedCommand,
-    input_redirect: &InputRedirect,
+    input_redirect: InputRedirect,
+    redirect_span: &Span,
     env: &mut Context,
-) -> Result<()> {
+) -> SpannedResult<()> {
     use InputRedirect::*;
     match input_redirect {
         // ファイルを読み込み用に開いて設定
         File(file) => {
             // ファイル名の評価
-            let value = eval_command_part(file, env)?;
+            let file_span = file.span.clone();
+            let value = eval_command_part(&file, env)?;
             let Value::String(path) = value
             else {
-                return Err(RedirectError::InvalidFileNameType.into());
+                return Err(RedirectError::InvalidFileNameType.into())
+                    .with_span(&file_span);
             };
 
             let file = std::fs::OpenOptions::new()
                 .read(true)
                 .open(path)
-                .map_err(RedirectError::FailOpenFile)?;
+                .map_err(RedirectError::FailOpenFile)
+                .with_span(&file_span)?;
             resolved_command.stdin = StdioInputConfig::File(file);
         }
         // 文字列をそのまま渡す
         HereDoc(s) => {
-            resolved_command.stdin =
-                StdioInputConfig::String(s.as_ref().clone());
+            resolved_command.stdin = StdioInputConfig::String(
+                s.as_ref().clone(),
+                redirect_span.clone(),
+            );
         }
         // 文字列を評価してそのまま渡す
         HereString(value) => {
-            let value = eval_command_part(value, env)?;
+            let value_span = value.span.clone();
+            let value = eval_command_part(&value, env)?;
             let Value::String(s) = value
             else {
-                return Err(RedirectError::InvalidHereInputType.into());
+                return Err(RedirectError::InvalidHereInputType.into())
+                    .with_span(&value_span);
             };
-            resolved_command.stdin = StdioInputConfig::String(s);
+            resolved_command.stdin =
+                StdioInputConfig::String(s, redirect_span.clone());
         }
     }
 
@@ -456,20 +541,12 @@ fn apply_input_redirect(
 }
 fn apply_output_redirect(
     resolved_command: &mut ResolvedCommand,
-    output_redirect: &OutputRedirect,
-    output_mode: &OutputMode,
-    file_expression: &CommandPart,
-    env: &mut Context,
+    output_redirect: OutputRedirect,
+    output_mode: OutputMode,
+    file_path: &str,
 ) -> Result<()> {
     use OutputMode::*;
     use OutputRedirect::*;
-
-    // ファイル名の評価
-    let value = eval_command_part(file_expression, env)?;
-    let Value::String(path) = value
-    else {
-        return Err(RedirectError::InvalidFileNameType.into());
-    };
 
     // ファイルをモードに応じて開く
     let mut file_opt = std::fs::OpenOptions::new();
@@ -479,7 +556,9 @@ fn apply_output_redirect(
         Append => file_opt.append(true),
         Truncate => file_opt.truncate(true),
     };
-    let file = file_opt.open(path).map_err(RedirectError::FailOpenFile)?;
+    let file = file_opt
+        .open(file_path)
+        .map_err(RedirectError::FailOpenFile)?;
     let file = StdioOutputConfig::File(file);
 
     // 書き込み元を設定
@@ -499,7 +578,7 @@ fn apply_output_redirect(
 }
 fn apply_merge_redirect(
     resolved_command: &mut ResolvedCommand,
-    merge_redirect: &MergeRedirect,
+    merge_redirect: MergeRedirect,
 ) -> Result<()> {
     use MergeRedirect::*;
     match merge_redirect {

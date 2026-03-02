@@ -149,14 +149,21 @@ pub fn expr_postfix(input: &mut Input) -> ModalResult<ExprPostfix> {
             '!' => empty.value(Unwrap),
             '?' => empty.value(IsSome),
             '@' => empty.value(Length),
-            '[' => delimited(space0, expr.spanned(), (space0, ']'))
-                .map(|index| Index(Box::new(index))),
-            'a' => preceded(('s', space0), ast_type.spanned())
-                .map(Cast),
             _ => fail,
         },
     )
     .parse_next(input)
+}
+pub fn expr_index(input: &mut Input) -> ModalResult<Spanned<Expr>> {
+    trace(
+        "expr_index",
+        delimited(('[', space0), expr.spanned(), (space0, ']')),
+    )
+    .parse_next(input)
+}
+pub fn expr_cast(input: &mut Input) -> ModalResult<Spanned<AstType>> {
+    trace("expr_cast", preceded(("as", space0), ast_type.spanned()))
+        .parse_next(input)
 }
 pub fn ast_type(input: &mut Input) -> ModalResult<AstType> {
     use AstType::*;
@@ -168,6 +175,7 @@ pub fn ast_type(input: &mut Input) -> ModalResult<AstType> {
         if opt((space0, '<')).parse_next(input)?.is_some() {
             let generics = preceded(space0, ast_type)
                 .or_err_with_span(TypeError::NoType)
+                .spanned()
                 .cut()
                 .parse_next(input)?;
             let _ = (space0, '>')
@@ -201,14 +209,8 @@ fn expr_pratt(input: &mut Input, min_power: i32) -> ModalResult<Spanned<Expr>> {
             // (expr) の括弧を剥がず
             // エラーなどは中身に対して行う
             match primary.inner {
-                Primary::Paren(expr) => Spanned {
-                    span: primary.span,
-                    inner: expr.inner,
-                },
-                _ => Spanned {
-                    span: primary.span.clone(),
-                    inner: Expr::Primary(primary),
-                },
+                Primary::Paren(expr) => Spanned::new(primary.span, expr.inner),
+                _ => Spanned::new(primary.span.clone(), Expr::Primary(primary)),
             }
         };
 
@@ -243,6 +245,34 @@ fn expr_pratt(input: &mut Input, min_power: i32) -> ModalResult<Spanned<Expr>> {
                 break;
             }
             lhs = postfix.apply(lhs);
+            continue;
+        }
+
+        // IndexとCast
+        if let Some(index) = opt(expr_index).parse_next(input)? {
+            let power = INDEX_POWER;
+            if power < min_power {
+                input.reset(&checkpoint);
+                break;
+            }
+            lhs = Spanned::new(
+                mix_span(&lhs.span, &index.span),
+                Expr::Index(Box::new(lhs), Box::new(index)),
+            );
+
+            continue;
+        }
+        if let Some(ast_type) = opt(expr_cast).parse_next(input)? {
+            let power = CAST_POWER;
+            if power < min_power {
+                input.reset(&checkpoint);
+                break;
+            }
+            lhs = Spanned::new(
+                mix_span(&lhs.span, &ast_type.span),
+                Expr::Cast(Box::new(lhs), ast_type),
+            );
+
             continue;
         }
 

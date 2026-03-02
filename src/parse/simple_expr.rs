@@ -33,10 +33,15 @@ pub fn simple_expr_postfix(input: &mut Input) -> ModalResult<ExprPostfix> {
             '!' => empty.value(Unwrap),
             '?' => empty.value(IsSome),
             '@' => empty.value(Length),
-            '[' => delimited(space0, expr.spanned(), (space0, ']'))
-                .map(|index|Index(Box::new(index))),
             _ => fail,
         },
+    )
+    .parse_next(input)
+}
+pub fn simple_expr_index(input: &mut Input) -> ModalResult<Spanned<Expr>> {
+    trace(
+        "simple_expr_index",
+        delimited(('[', space0), expr.spanned(), (space0, ']')),
     )
     .parse_next(input)
 }
@@ -59,10 +64,7 @@ pub fn simple_expr(input: &mut Input) -> ModalResult<Expr> {
 pub fn simple_expr_pratt(input: &mut Input) -> ModalResult<Spanned<Expr>> {
     // 値
     let primary = simple_expr_primary.spanned().parse_next(input)?;
-    let mut lhs = Spanned {
-        span: primary.span.clone(),
-        inner: Expr::Primary(primary),
-    };
+    let mut lhs = Spanned::new(primary.span.clone(), Expr::Primary(primary));
 
     loop {
         // 後置演算子
@@ -70,6 +72,16 @@ pub fn simple_expr_pratt(input: &mut Input) -> ModalResult<Spanned<Expr>> {
             opt(simple_expr_postfix.spanned()).parse_next(input)?
         {
             lhs = postfix.apply(lhs);
+            continue;
+        }
+
+        // Index
+        if let Some(index) = opt(simple_expr_index).parse_next(input)? {
+            lhs = Spanned::new(
+                mix_span(&lhs.span, &index.span),
+                Expr::Index(Box::new(lhs), Box::new(index)),
+            );
+
             continue;
         }
 

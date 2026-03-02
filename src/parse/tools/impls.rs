@@ -53,10 +53,7 @@ where
         let start = input.current_token_start();
         self.parser.parse_next(input).map(move |output| {
             let end = input.previous_token_end();
-            crate::parse::Spanned {
-                inner: output,
-                span: start..end,
-            }
+            crate::parse::Spanned::new(start..end, output)
         })
     }
 }

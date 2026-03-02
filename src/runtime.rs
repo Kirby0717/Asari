@@ -3,7 +3,11 @@ pub mod exec;
 pub mod shell_command;
 pub mod subst;
 
-use exec::Error as ExecError;
+use crate::parse::Span;
+use eval::Error as EvalError;
+use exec::{Error as ExecError, RedirectError};
+use shell_command::Error as ShellCommandError;
+use subst::Error as SubstError;
 
 use std::collections::HashMap;
 
@@ -17,13 +21,62 @@ impl Shell {
     pub fn new() -> Self {
         Self::default()
     }
-    pub fn execute(
-        &mut self,
-        shell_command: &crate::parse::CommandLine,
-    ) -> Result<(), ExecError> {
+    pub fn set_input(&mut self, input: &str) {
+        self.context.current_input = input.to_string();
+    }
+    pub fn execute(&mut self, shell_command: &crate::parse::CommandLine) {
         exec::execute_command_line(shell_command, &mut self.context)
     }
 }
+
+#[derive(Clone, Debug)]
+pub struct SpannedError<E> {
+    kind: E,
+    span: Span,
+}
+impl<E> SpannedError<E> {
+    pub fn display(&self, input: &str) -> String
+    where
+        E: std::fmt::Display,
+    {
+        let mut display = String::new();
+        display += &format!("{}\n", input.replace(['\n', '\r'], " "));
+        display += &format!(
+            "{}{} {}\n",
+            " ".repeat(self.span.start),
+            "^".repeat(self.span.len()),
+            self.kind
+        );
+        display
+    }
+}
+trait WithSpan<T, E> {
+    fn with_span(self, span: &Span) -> Result<T, SpannedError<E>>;
+}
+impl<T, E> WithSpan<T, E> for Result<T, E> {
+    fn with_span(self, span: &Span) -> Result<T, SpannedError<E>> {
+        self.map_err(|kind| SpannedError {
+            kind,
+            span: span.clone(),
+        })
+    }
+}
+macro_rules! impl_spanned_from {
+    ($from:ident => $to:ident :: $variant:ident) => {
+        impl From<SpannedError<$from>> for SpannedError<$to> {
+            fn from(e: SpannedError<$from>) -> Self {
+                SpannedError {
+                    kind: $to::$variant(e.kind),
+                    span: e.span,
+                }
+            }
+        }
+    };
+}
+impl_spanned_from!(EvalError         => ExecError::Eval);
+impl_spanned_from!(SubstError        => EvalError::Subst);
+impl_spanned_from!(RedirectError     => ExecError::Redirect);
+impl_spanned_from!(ShellCommandError => ExecError::ShellCommand);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Context {
@@ -33,7 +86,6 @@ pub struct Context {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_pid: Option<u32>,
     pub last_status: i32,
-    #[serde(default, skip)]
     pub current_input: String,
 }
 impl Default for Context {
