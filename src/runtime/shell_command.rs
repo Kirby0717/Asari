@@ -1,28 +1,27 @@
-use crate::value::Value;
+use super::Value;
 
 use std::fmt::Display;
-use std::io::Error as IoError;
 
 use serde::{Deserialize, Serialize};
 
+type Result<T> = ::std::result::Result<T, Error>;
 #[derive(Debug)]
 pub enum Error {
     Exit(i32),
     InvalidArgs,
-    Stdio(std::io::Error),
     Other(String),
 }
-impl From<IoError> for Error {
-    fn from(value: IoError) -> Self {
-        Error::Stdio(value)
-    }
-}
+impl std::error::Error for Error {}
 impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{self:?}")
+        use Error::*;
+        match self {
+            Exit(code) => write!(f, "コード{code}で終了します"),
+            InvalidArgs => write!(f, "不正な引数です"),
+            Other(e) => write!(f, "不明なエラー : {e}"),
+        }
     }
 }
-pub type Result<T> = ::std::result::Result<T, Error>;
 
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum ShellCommandKind {
@@ -37,18 +36,12 @@ pub fn find_shell_command(name: &str) -> Option<ShellCommandKind> {
         _ => None?,
     })
 }
-pub fn run(command: ShellCommandKind, args: &[Value]) -> Result<i32> {
+pub fn run(command: &ShellCommandKind, args: &[Value]) -> Result<i32> {
     use ShellCommandKind::*;
-    let result = match command {
+    match command {
         Cd => cd(args),
         Exit => exit(args),
-    };
-    if let Err(Error::Stdio(e)) = &result
-        && e.kind() == std::io::ErrorKind::BrokenPipe
-    {
-        return Ok(0);
     }
-    result
 }
 fn cd(args: &[Value]) -> Result<i32> {
     if 1 < args.len() {

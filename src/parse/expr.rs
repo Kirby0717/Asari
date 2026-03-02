@@ -6,7 +6,7 @@ pub fn bin_int(input: &mut Input) -> ModalResult<i64> {
     trace(
         "bin_int",
         take_while(1.., '0'..='1').try_map_with_span(|s| {
-            i64::from_str_radix(s, 2).map_err(ParseErrorKind::ParseBinError)
+            i64::from_str_radix(s, 2).map_err(NumberError::Bin)
         }),
     )
     .cut()
@@ -16,7 +16,7 @@ pub fn oct_int(input: &mut Input) -> ModalResult<i64> {
     trace(
         "oct_int",
         take_while(1.., '0'..='7').try_map_with_span(|s| {
-            i64::from_str_radix(s, 8).map_err(ParseErrorKind::ParseOctError)
+            i64::from_str_radix(s, 8).map_err(NumberError::Oct)
         }),
     )
     .cut()
@@ -26,10 +26,7 @@ pub fn hex_int(input: &mut Input) -> ModalResult<i64> {
     trace(
         "hex_int",
         take_while(1.., ('0'..='9', 'A'..='F', 'a'..='f')).try_map_with_span(
-            |s| {
-                i64::from_str_radix(s, 16)
-                    .map_err(ParseErrorKind::ParseHexError)
-            },
+            |s| i64::from_str_radix(s, 16).map_err(NumberError::Hex),
         ),
     )
     .cut()
@@ -48,19 +45,17 @@ pub fn dec_number(input: &mut Input) -> ModalResult<Primary> {
     input.reset(&start);
     if decimal_part.is_some() || exp_part.is_some() {
         let l = float_checkpoint.offset_from(&start);
-        let float = take(l)
-            .try_map_with_span(|s| {
-                s.parse::<f64>().map_err(ParseErrorKind::ParseFloatError)
-            })
+        let float = trace("float", take(l))
+            .try_map_with_span(|s| s.parse::<f64>().map_err(NumberError::Float))
+            .cut()
             .parse_next(input)?;
         Ok(Primary::Float(float))
     }
     else {
         let l = int_checkpoint.offset_from(&start);
-        let int = take(l)
-            .try_map_with_span(|s| {
-                s.parse::<i64>().map_err(ParseErrorKind::ParseDecError)
-            })
+        let int = trace("dec_int", take(l))
+            .try_map_with_span(|s| s.parse::<i64>().map_err(NumberError::Dec))
+            .cut()
             .parse_next(input)?;
         Ok(Primary::Int(int))
     }
@@ -78,43 +73,39 @@ pub fn number(input: &mut Input) -> ModalResult<Primary> {
     .parse_next(input)
 }
 
-pub fn expr_primary(input: &mut Input) -> SpannedResult<Primary> {
+pub fn expr_primary(input: &mut Input) -> ModalResult<Primary> {
     trace(
         "expr_primary",
         dispatch! {peek(any);
             '\'' => quoted_string.map(Primary::String),
             '"' => double_quoted_string.map(Primary::String),
-            '$' => preceded('$', alt((
-                delimited(('(', space0), command_line, (space0, ')'))
-                    .map(|shell_command| Primary::CommandSubst(Box::new(shell_command))),
+            '$' => alt((
+                subst.spanned().map(|subst| Primary::CommandSubst(Box::new(subst))),
                 special_var.map(Primary::SpecialVar),
-                ident.cut().map(Primary::EnvVar),
-            ))),
-            '@' => preceded('@', ident).cut().map(Primary::ShellVar),
+                ident.map(Primary::EnvVar),
+            )).cut(),
+            '@' => shell_var.cut().map(Primary::ShellVar),
             '(' => alt((
-                ('(', space0, ')').value(Primary::Unit),
-                delimited(('(', space0), expr, (space0, ')'))
-                    .map(|expr| Primary::Paren(Box::new(expr)))
-            )),
+                unit.value(Primary::Unit),
+                paren.map(|expr| Primary::Paren(Box::new(expr)))
+            )).cut(),
             'r' => raw_string.map(Primary::String),
             'p' => path_string.map(Primary::PathString),
-            '[' => delimited(('[', space0), separated(0.., expr, delimited(space0, ',', space0)), ']')
-                .map(|exprs| {
-                    Primary::Array(exprs)
-                }),
+            '[' => array.cut().map(Primary::Array),
             't' => keyword("true").value(Primary::Bool(true)),
             'f' => keyword("false").value(Primary::Bool(false)),
             '0'..='9' => number,
             'n' => keyword("none").value(Primary::Option(None)),
-            's' => delimited((keyword("some"), space0, '(', space0), expr, (space0, ')'))
-                .map(|expr| Primary::Option(Some(Box::new(expr)))),
+            's' => preceded(
+                keyword("some"),
+                paren.map(|expr| Primary::Option(Some(Box::new(expr)))),
+            ).cut(),
             _ => fail,
         },
     )
-    .spanned()
     .parse_next(input)
 }
-pub fn expr_prefix(input: &mut Input) -> SpannedResult<ExprPrefix> {
+pub fn expr_prefix(input: &mut Input) -> ModalResult<ExprPrefix> {
     use ExprPrefix::*;
     trace(
         "expr_prefix",
@@ -124,10 +115,9 @@ pub fn expr_prefix(input: &mut Input) -> SpannedResult<ExprPrefix> {
             _ => fail,
         },
     )
-    .spanned()
     .parse_next(input)
 }
-pub fn expr_infix(input: &mut Input) -> SpannedResult<ExprInfix> {
+pub fn expr_infix(input: &mut Input) -> ModalResult<ExprInfix> {
     use ExprInfix::*;
     trace(
         "expr_infix",
@@ -149,10 +139,9 @@ pub fn expr_infix(input: &mut Input) -> SpannedResult<ExprInfix> {
             _ => fail,
         },
     )
-    .spanned()
     .parse_next(input)
 }
-pub fn expr_postfix(input: &mut Input) -> SpannedResult<ExprPostfix> {
+pub fn expr_postfix(input: &mut Input) -> ModalResult<ExprPostfix> {
     use ExprPostfix::*;
     trace(
         "expr_prefix",
@@ -160,92 +149,124 @@ pub fn expr_postfix(input: &mut Input) -> SpannedResult<ExprPostfix> {
             '!' => empty.value(Unwrap),
             '?' => empty.value(IsSome),
             '@' => empty.value(Length),
-            '[' => delimited(space0, expr, (space0, ']'))
-                .map(|index| Index(Box::new(index))),
-            'a' => preceded(('s', space0), expr_type)
-                .map(Cast),
             _ => fail,
         },
     )
-    .spanned()
     .parse_next(input)
 }
-pub fn expr_type(input: &mut Input) -> SpannedResult<Type> {
-    use Type::*;
-    let mut type_name = take_while(1.., 'a'..='z');
+pub fn expr_index(input: &mut Input) -> ModalResult<Spanned<Expr>> {
     trace(
-        "expr_type",
-        dispatch! {type_name;
-            "string" => empty.value(String),
-            "int" => empty.value(Int),
-            "float" => empty.value(Float),
-            "bool" => empty.value(Bool),
-            "array" => delimited((space0, '<', space0), expr_type, (space0, '>', space0))
-                .map(|t| Array(Box::new(t.inner))),
-            "option" => delimited((space0, '<', space0), expr_type, (space0, '>', space0))
-                .map(|t| Option(Box::new(t.inner))),
-            "unit" => empty.value(Unit),
-            _ => fail,
-        },
+        "expr_index",
+        delimited(('[', space0), expr.spanned(), (space0, ']')),
     )
-    .spanned()
     .parse_next(input)
 }
-pub fn expr(input: &mut Input) -> SpannedResult<Expr> {
-    trace("expr", expr_pratt_top).parse_next(input)
-}
-#[inline(always)]
-fn expr_pratt_top(input: &mut Input) -> SpannedResult<Expr> {
-    expr_pratt(input, 0)
-}
-fn expr_pratt(input: &mut Input, min_power: i32) -> SpannedResult<Expr> {
-    // 前置演算子 or 値
-    let mut lhs = if let Some(prefix) = opt(expr_prefix).parse_next(input)? {
+pub fn expr_cast(input: &mut Input) -> ModalResult<(Span, Spanned<AstType>)> {
+    trace("expr_cast", |input: &mut Input| {
+        let span = "as".span().parse_next(input)?;
         let _ = space0.parse_next(input)?;
-        let rhs = expr_pratt(input, prefix.inner.power())?;
-        prefix.apply(rhs)
-    }
-    else {
-        let primary = expr_primary.parse_next(input)?;
-        // (expr) の括弧を剥がず
-        // エラーなどは中身に対して行う
-        match primary.inner {
-            Primary::Paren(expr) => Spanned {
-                span: primary.span,
-                inner: expr.inner,
-            },
-            _ => Spanned {
-                span: primary.span.clone(),
-                inner: Expr::Primary(primary),
-            },
+        let ast_type = ast_type.spanned().parse_next(input)?;
+        Ok((span, ast_type))
+    })
+    .parse_next(input)
+}
+pub fn ast_type(input: &mut Input) -> ModalResult<AstType> {
+    use AstType::*;
+    trace("expr_type", |input: &mut Input| {
+        if opt('_').parse_next(input)?.is_some() {
+            return Ok(Unknown);
         }
-    };
+        let name = ident.cut().parse_next(input)?;
+        if opt((space0, '<')).parse_next(input)?.is_some() {
+            let generics = preceded(space0, ast_type)
+                .or_err_with_span(TypeError::NoType)
+                .spanned()
+                .cut()
+                .parse_next(input)?;
+            let _ = (space0, '>')
+                .or_err_with_span(TypeError::UnclosedTypeParam)
+                .cut()
+                .parse_next(input)?;
+            Ok(Generics(name, Box::new(generics)))
+        }
+        else {
+            Ok(Normal(name))
+        }
+    })
+    .parse_next(input)
+}
+pub fn expr(input: &mut Input) -> ModalResult<Expr> {
+    trace("expr", |input: &mut Input| expr_pratt(input, 0)).parse_next(input)
+}
+fn expr_pratt(input: &mut Input, min_power: i32) -> ModalResult<Expr> {
+    // 前置演算子 or 値
+    let mut lhs =
+        if let Some(prefix) = opt(expr_prefix.spanned()).parse_next(input)? {
+            let _ = space0.parse_next(input)?;
+            let rhs = expr_pratt(input, prefix.inner.power())?;
+            prefix.apply(rhs)
+        }
+        else {
+            let primary = expr_primary.spanned().parse_next(input)?;
+            // (expr) の括弧を剥がず
+            // エラーなどは中身に対して行う
+            match primary.inner {
+                Primary::Paren(expr) => *expr,
+                _ => Expr::Primary(primary),
+            }
+        };
 
     loop {
         let checkpoint = input.checkpoint();
         let _ = space0.parse_next(input)?;
 
         // 中置演算子
-        if let Some(infix) = opt(expr_infix).parse_next(input)? {
+        if let Some(infix) = opt(expr_infix.spanned()).parse_next(input)? {
             let (l_power, r_power) = infix.inner.power();
             if l_power < min_power {
                 input.reset(&checkpoint);
                 break;
             }
             let _ = space0.parse_next(input)?;
-            let rhs = expr_pratt(input, r_power)?;
+            let cursor = input.current_token_start();
+            let rhs = expr_pratt(input, r_power).map_err(|_| {
+                winnow::error::ErrMode::Cut(ParseError {
+                    kind: ParseErrorKind::Expr(ExprError::NoRhs),
+                    span: cursor..cursor + 1,
+                })
+            })?;
             lhs = infix.apply(lhs, rhs);
             continue;
         }
 
         // 後置演算子
-        if let Some(postfix) = opt(expr_postfix).parse_next(input)? {
+        if let Some(postfix) = opt(expr_postfix.spanned()).parse_next(input)? {
             let power = postfix.inner.power();
             if power < min_power {
                 input.reset(&checkpoint);
                 break;
             }
             lhs = postfix.apply(lhs);
+            continue;
+        }
+
+        // IndexとCast
+        if let Some(index) = opt(expr_index).parse_next(input)? {
+            let power = INDEX_POWER;
+            if power < min_power {
+                input.reset(&checkpoint);
+                break;
+            }
+            lhs = Expr::Index(Box::new(lhs), Box::new(index));
+            continue;
+        }
+        if let Some((span, ast_type)) = opt(expr_cast).parse_next(input)? {
+            let power = CAST_POWER;
+            if power < min_power {
+                input.reset(&checkpoint);
+                break;
+            }
+            lhs = Expr::Cast(Box::new(lhs), span, ast_type);
             continue;
         }
 

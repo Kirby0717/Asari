@@ -5,8 +5,7 @@ pub mod literal;
 pub mod simple_expr;
 pub mod tools;
 
-use crate::shell_command::ShellCommandKind;
-use crate::value::Type;
+use crate::runtime::shell_command::ShellCommandKind;
 use command::command_line;
 use error::*;
 use expr::expr;
@@ -19,42 +18,43 @@ use winnow::{
     LocatingSlice,
     combinator::{
         alt, delimited, dispatch, empty, fail, not, opt, peek, preceded,
-        repeat, separated, trace,
+        repeat, separated, terminated, trace,
     },
     prelude::*,
+    stream::Location,
     token::{any, rest, take, take_till, take_until, take_while},
 };
 
 pub type Input<'i> = LocatingSlice<&'i str>;
-type Span = std::ops::Range<usize>;
-
-fn mix_span(a: &Span, b: &Span) -> Span {
-    a.start.min(b.start)..a.end.max(b.end)
-}
+pub type Span = std::ops::Range<usize>;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(transparent)]
 pub struct Spanned<T> {
-    pub inner: T,
-    #[serde(skip)]
     pub span: Span,
+    pub inner: T,
 }
 impl<T> Spanned<T> {
+    pub fn new(span: Span, inner: T) -> Self {
+        Self { span, inner }
+    }
+    pub fn into_inner(self) -> T {
+        self.inner
+    }
     pub fn _map<U, F: FnOnce(T) -> U>(self, f: F) -> Spanned<U> {
         Spanned {
-            inner: f(self.inner),
             span: self.span,
+            inner: f(self.inner),
         }
+    }
+}
+impl<T> AsRef<T> for Spanned<T> {
+    fn as_ref(&self) -> &T {
+        &self.inner
     }
 }
 impl<T: PartialEq> PartialEq for Spanned<T> {
     fn eq(&self, other: &Self) -> bool {
         self.inner.eq(&other.inner)
-    }
-}
-impl<T: PartialOrd> PartialOrd for Spanned<T> {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.inner.partial_cmp(&other.inner)
     }
 }
 impl<T: std::fmt::Display> std::fmt::Display for Spanned<T> {
@@ -63,89 +63,98 @@ impl<T: std::fmt::Display> std::fmt::Display for Spanned<T> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CommandLine {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub statements: Vec<Spanned<Statement>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip)]
     pub comment: Option<Spanned<String>>,
 }
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Statement {
-    ShellCommand(Spanned<ShellCommand>),
-    Pipeline(Spanned<Pipeline>),
-    EnvAssign(Spanned<EnvAssign>),
+    ShellCommand(ShellCommand),
+    Pipeline(Pipeline),
+    EnvAssign(EnvAssign),
 }
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ShellCommand {
-    pub kind: Spanned<ShellCommandKind>,
+    pub kind: ShellCommandKind,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<Spanned<CommandPart>>,
 }
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct EnvAssign {
     pub name: Spanned<String>,
     pub value: Spanned<Expr>,
 }
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Pipeline {
     pub first: Spanned<Command>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rest: Vec<(Spanned<Pipe>, Spanned<Command>)>,
 }
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Pipe {
     Stdout,       // |   stdoutのみ
     StdoutStderr, // |&  stdout + stderr
 }
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Command {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub temp_env: Vec<Spanned<(Spanned<String>, Spanned<Expr>)>>,
+    pub temp_envs: Vec<Spanned<(Spanned<String>, Spanned<Expr>)>>,
     pub name: Spanned<CommandPart>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<Spanned<CommandPart>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub redirects: Vec<Spanned<Redirect>>,
 }
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Redirect {
     Input(InputRedirect),
     Output(((OutputRedirect, OutputMode), Spanned<CommandPart>)),
-    Merge(MergeRedirect),
+    Merge(Spanned<MergeRedirect>),
 }
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum InputRedirect {
     File(Spanned<CommandPart>),       // <    file
     HereDoc(Spanned<String>),         // <<   EOF ... EOF
     HereString(Spanned<CommandPart>), // <<< "string"
 }
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum OutputRedirect {
     Stdout, // >  >>
     Stderr, // 2> 2>>
     Both,   // &> &>>
 }
 
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum OutputMode {
     Truncate, // >  2>  &>
     Append,   // >> 2>> &>>
 }
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum MergeRedirect {
     StderrToStdout, // 2>&1
     StdoutToStderr, // 1>&2
 }
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum CommandPart {
-    Unquoted(Spanned<String>),
-    SimpleExpr(Spanned<Expr>),
+    Unquoted(String),
+    SimpleExpr(Expr),
 }
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ExprPrefix {
     Not, // !
     Neg, // -
+}
+impl std::fmt::Display for ExprPrefix {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use ExprPrefix::*;
+        match self {
+            Not => write!(f, "!"),
+            Neg => write!(f, "-"),
+        }
+    }
 }
 impl ExprPrefix {
     fn power(&self) -> i32 {
@@ -157,15 +166,11 @@ impl ExprPrefix {
     }
 }
 impl Spanned<ExprPrefix> {
-    fn apply(self, expr: Spanned<Expr>) -> Spanned<Expr> {
-        let expr = Box::new(expr);
-        Spanned {
-            span: mix_span(&self.span, &expr.span),
-            inner: Expr::Prefix(expr, self.inner),
-        }
+    fn apply(self, expr: Expr) -> Expr {
+        Expr::Prefix(self, Box::new(expr))
     }
 }
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ExprInfix {
     UnwrapOr,     // ^
     Add,          // +
@@ -181,6 +186,27 @@ pub enum ExprInfix {
     GreaterEqual, // >=
     And,          // &&
     Or,           // ||
+}
+impl std::fmt::Display for ExprInfix {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use ExprInfix::*;
+        match self {
+            UnwrapOr => write!(f, "^"),
+            Add => write!(f, "+"),
+            Sub => write!(f, "-"),
+            Mul => write!(f, "*"),
+            Div => write!(f, "/"),
+            Rem => write!(f, "%"),
+            Equal => write!(f, "=="),
+            NotEqual => write!(f, "!="),
+            Less => write!(f, "<"),
+            LessEqual => write!(f, "<="),
+            Greater => write!(f, ">"),
+            GreaterEqual => write!(f, ">="),
+            And => write!(f, "&&"),
+            Or => write!(f, "||"),
+        }
+    }
 }
 impl ExprInfix {
     #[rustfmt::skip]
@@ -207,27 +233,26 @@ impl ExprInfix {
     }
 }
 impl Spanned<ExprInfix> {
-    fn apply(
-        self,
-        l_expr: Spanned<Expr>,
-        r_expr: Spanned<Expr>,
-    ) -> Spanned<Expr> {
-        let l_expr = Box::new(l_expr);
-        let r_expr = Box::new(r_expr);
-        Spanned {
-            span: mix_span(&l_expr.span, &r_expr.span),
-            inner: Expr::Infix(l_expr, r_expr, self.inner),
-        }
+    fn apply(self, l_expr: Expr, r_expr: Expr) -> Expr {
+        Expr::Infix(Box::new(l_expr), self, Box::new(r_expr))
     }
 }
-type ExprNode = Box<Spanned<Expr>>;
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+type ExprNode = Box<Expr>;
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ExprPostfix {
-    Unwrap,              // !
-    IsSome,              // ?
-    Length,              // @
-    Index(ExprNode),     // [expr]
-    Cast(Spanned<Type>), // as type
+    Unwrap, // !
+    IsSome, // ?
+    Length, // @
+}
+impl std::fmt::Display for ExprPostfix {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use ExprPostfix::*;
+        match self {
+            Unwrap => write!(f, "!"),
+            IsSome => write!(f, "?"),
+            Length => write!(f, "@"),
+        }
+    }
 }
 impl ExprPostfix {
     fn power(&self) -> i32 {
@@ -236,44 +261,48 @@ impl ExprPostfix {
             Unwrap => 10,
             IsSome => 10,
             Length => 10,
-            Index(_) => 10,
-            Cast(_) => 9,
         }
     }
 }
+const INDEX_POWER: i32 = 10;
+const CAST_POWER: i32 = 9;
 impl Spanned<ExprPostfix> {
-    fn apply(self, expr: Spanned<Expr>) -> Spanned<Expr> {
-        let expr = Box::new(expr);
-        Spanned {
-            span: mix_span(&expr.span, &self.span),
-            inner: Expr::Postfix(expr, self.inner),
-        }
+    fn apply(self, expr: Expr) -> Expr {
+        Expr::Postfix(Box::new(expr), self)
     }
 }
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Expr {
     Primary(Spanned<Primary>),
-    Prefix(ExprNode, ExprPrefix),
-    Infix(ExprNode, ExprNode, ExprInfix),
-    Postfix(ExprNode, ExprPostfix),
+    Prefix(Spanned<ExprPrefix>, ExprNode),
+    Infix(ExprNode, Spanned<ExprInfix>, ExprNode),
+    Postfix(ExprNode, Spanned<ExprPostfix>),
+    Index(ExprNode, Box<Spanned<Expr>>), // [expr]
+    Cast(ExprNode, Span, Spanned<AstType>), // as type
 }
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Primary {
     String(String),                          // "abc", 'abc', r"abc"
     PathString(String),                      // p"abc"
     SpecialVar(SpecialVar),                  // $?, $$, $!, $@
     EnvVar(String),                          // $abc
     ShellVar(String),                        // @abc
-    Paren(Box<Spanned<Expr>>),               // (expr)
+    Paren(Box<Expr>),                        // (expr)
     CommandSubst(Box<Spanned<CommandLine>>), // $(command args...)
-    Array(Vec<Spanned<Expr>>),               // [e1, e2, ... , ek]
+    Array(Vec<Expr>),                        // [e1, e2, ... , ek]
     Bool(bool),                              // true, false
     Int(i64),                                // 123
     Float(f64),                              // 12.3
-    Option(Option<Box<Spanned<Expr>>>),      // none, some(expr)
+    Option(Option<Box<Expr>>),               // none, some(expr)
     Unit,                                    // ()
 }
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum AstType {
+    Unknown,                                 // _
+    Normal(String),                          // int float bool string ...
+    Generics(String, Box<Spanned<AstType>>), // array option ...
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum SpecialVar {
     ExitStatus,    // $?
     Pid,           // $$
@@ -282,12 +311,11 @@ pub enum SpecialVar {
 }
 
 type ModalResult<O> = winnow::ModalResult<O, ParseError>;
-type SpannedResult<O> = ModalResult<Spanned<O>>;
 
 pub fn parse_shell_command(
     input: &str,
 ) -> Result<
-    Spanned<CommandLine>,
+    CommandLine,
     winnow::error::ParseError<LocatingSlice<&str>, ParseError>,
 > {
     delimited(space0, command_line, space0).parse(Input::new(input))
@@ -296,21 +324,18 @@ pub fn parse_shell_command(
 fn space0<'a>(input: &mut Input<'a>) -> ModalResult<&'a str> {
     trace("space0", take_while(0.., char::is_whitespace)).parse_next(input)
 }
-fn space1<'a>(input: &mut Input<'a>) -> ModalResult<&'a str> {
-    trace("space1", take_while(1.., char::is_whitespace)).parse_next(input)
-}
 fn ident(input: &mut Input) -> ModalResult<String> {
     use unicode_ident::*;
     trace(
         "ident",
         (
-            any.map_err_with_span(|()| ParseErrorKind::NoIdent)
+            any.or_err_with_span(IdentError::Expected)
                 .try_map_with_span(|c| {
                     if c == '_' || is_xid_start(c) {
                         Ok(c)
                     }
                     else {
-                        Err(ParseErrorKind::NoIdent)
+                        Err(IdentError::Expected)
                     }
                 }),
             take_while(0.., is_xid_continue),
@@ -318,7 +343,7 @@ fn ident(input: &mut Input) -> ModalResult<String> {
     )
     .try_map_with_span(|(ident_start, ident_continue)| {
         if ident_start == '_' && ident_continue.is_empty() {
-            Err(ParseErrorKind::InvalidIdent)
+            Err(IdentError::Invalid)
         }
         else {
             Ok(String::from(ident_start) + ident_continue)
@@ -338,16 +363,107 @@ fn keyword<'a>(
     )
     .map(|(s, _)| s)
 }
+
+fn unit(input: &mut Input) -> ModalResult<()> {
+    let begin = input.current_token_start();
+    let _ = '('.parse_next(input)?;
+    let end = input.previous_token_end();
+
+    let _ = space0.parse_next(input)?;
+
+    if input.is_empty() {
+        fail.or_err_at(ExprError::UnclosedParen, begin..end)
+            .parse_next(input)?;
+    }
+    let _ = ')'
+        .or_err_at(ExprError::UnclosedParen, begin..end)
+        .parse_next(input)?;
+
+    Ok(())
+}
+fn paren(input: &mut Input) -> ModalResult<Expr> {
+    let begin = input.current_token_start();
+    let _ = '('.parse_next(input)?;
+    let end = input.previous_token_end();
+
+    let _ = space0.parse_next(input)?;
+
+    let expr = expr.parse_next(input)?;
+
+    let _ = space0.parse_next(input)?;
+
+    if input.is_empty() {
+        fail.or_err_at(ExprError::UnclosedParen, begin..end)
+            .parse_next(input)?;
+    }
+    let _ = ')'
+        .or_err_at(ExprError::UnclosedParen, begin..end)
+        .parse_next(input)?;
+
+    Ok(expr)
+}
+fn subst(input: &mut Input) -> ModalResult<CommandLine> {
+    let begin = input.current_token_start();
+    let _ = "$(".parse_next(input)?;
+    let end = input.previous_token_end();
+
+    let _ = space0.parse_next(input)?;
+
+    let command_line = command_line.parse_next(input)?;
+
+    let _ = space0.parse_next(input)?;
+
+    if input.is_empty() {
+        fail.or_err_at(ExprError::UnclosedCommandSubst, begin..end)
+            .parse_next(input)?;
+    }
+    let _ = ')'
+        .or_err_with_span(ExprError::UnclosedCommandSubst)
+        .parse_next(input)?;
+
+    Ok(command_line)
+}
+fn array(input: &mut Input) -> ModalResult<Vec<Expr>> {
+    let begin = input.current_token_start();
+    let _ = '['.parse_next(input)?;
+    let end = input.previous_token_end();
+
+    let _ = space0.parse_next(input)?;
+
+    let array = separated(0.., expr, delimited(space0, ',', space0))
+        .parse_next(input)?;
+
+    let _ = space0.parse_next(input)?;
+
+    if input.is_empty() {
+        fail.or_err_at(ExprError::UnclosedBracket, begin..end)
+            .parse_next(input)?;
+    }
+    let _ = ']'
+        .or_err_with_span(ExprError::UnclosedBracket)
+        .parse_next(input)?;
+
+    Ok(array)
+}
+fn env_var(input: &mut Input) -> ModalResult<String> {
+    trace("env_var", preceded('$', ident)).parse_next(input)
+}
+fn shell_var(input: &mut Input) -> ModalResult<String> {
+    trace("shell_var", preceded('@', ident)).parse_next(input)
+}
 fn special_var(input: &mut Input) -> ModalResult<SpecialVar> {
     trace(
         "special_var",
-        dispatch! {any;
-            '?' => empty.value(SpecialVar::ExitStatus),
-            '$' => empty.value(SpecialVar::Pid),
-            '!' => empty.value(SpecialVar::BackgroundPid),
-            '@' => empty.value(SpecialVar::ShellName),
-            _ => fail,
-        },
+        preceded(
+            '$',
+            dispatch! {any;
+                '?' => empty.value(SpecialVar::ExitStatus),
+                '$' => empty.value(SpecialVar::Pid),
+                '!' => empty.value(SpecialVar::BackgroundPid),
+                '@' => empty.value(SpecialVar::ShellName),
+                _ => fail,
+            },
+        ),
     )
     .parse_next(input)
 }

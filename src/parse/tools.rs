@@ -1,5 +1,6 @@
 mod impls;
 
+use super::Span;
 use crate::parse::error::*;
 
 use std::marker::PhantomData;
@@ -39,31 +40,70 @@ pub trait ParserExt<I, O, E>: Parser<I, O, E> {
             e: PhantomData,
         }
     }
-}
-impl<I, O, E, P: Parser<I, O, ErrMode<E>>> ParserModalExt<I, O, E> for P {}
-pub trait ParserModalExt<I, O, E>: Parser<I, O, ErrMode<E>> {
     #[inline(always)]
-    fn map_err_with_span<G>(
+    fn reject_with_span<G, E2>(
         self,
         map: G,
-    ) -> impls::MapErrWithSpan<Self, G, I, O, E>
+    ) -> impls::RejectWithSpan<Self, G, I, O, E, E2>
     where
-        G: FnMut(E) -> ParseErrorKind,
-        Self: core::marker::Sized,
-        I: Location,
+        Self: Sized,
+        G: FnMut(O) -> E2,
+        I: Stream + Location,
+        ParseErrorKind: FromExternalError<I, E2>,
     {
-        impls::MapErrWithSpan {
+        impls::RejectWithSpan {
             parser: self,
             map,
-            i: Default::default(),
-            o: Default::default(),
-            e: Default::default(),
+            i: PhantomData,
+            o: PhantomData,
+            e: PhantomData,
+            e2: PhantomData,
         }
     }
 }
+/*impl<I, O, E, P: Parser<I, O, ErrMode<E>>> ParserModalExt<I, O, E> for P {}
+pub trait ParserModalExt<I, O, E>: Parser<I, O, ErrMode<E>> {
+}*/
 
 impl<I, O, P: Parser<I, O, ErrMode<ParseError>>> ParserSpanExt<I, O> for P {}
 pub trait ParserSpanExt<I, O>: Parser<I, O, ErrMode<ParseError>> {
+    #[inline(always)]
+    fn or_err_with_span<E2>(
+        self,
+        kind: E2,
+    ) -> impls::OrErrWithSpan<Self, I, O, E2>
+    where
+        Self: Sized,
+        I: Location,
+        E2: Clone,
+        ParseErrorKind: FromExternalError<I, E2>,
+    {
+        impls::OrErrWithSpan {
+            parser: self,
+            kind,
+            i: PhantomData,
+            o: PhantomData,
+        }
+    }
+    fn or_err_at<E2>(
+        self,
+        kind: E2,
+        span: Span,
+    ) -> impls::OrErrAt<Self, I, O, E2>
+    where
+        Self: Sized,
+        I: Location,
+        E2: Clone,
+        ParseErrorKind: FromExternalError<I, E2>,
+    {
+        impls::OrErrAt {
+            parser: self,
+            kind,
+            span,
+            i: PhantomData,
+            o: PhantomData,
+        }
+    }
     #[inline(always)]
     fn try_map_with_span<G, O2, E2>(
         self,
