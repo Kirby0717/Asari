@@ -87,7 +87,7 @@ pub fn expr_primary(input: &mut Input) -> ModalResult<Primary> {
             '@' => shell_var.cut().map(Primary::ShellVar),
             '(' => alt((
                 unit.value(Primary::Unit),
-                paren.spanned().map(|expr| Primary::Paren(Box::new(expr)))
+                paren.map(|expr| Primary::Paren(Box::new(expr)))
             )).cut(),
             'r' => raw_string.map(Primary::String),
             'p' => path_string.map(Primary::PathString),
@@ -98,7 +98,7 @@ pub fn expr_primary(input: &mut Input) -> ModalResult<Primary> {
             'n' => keyword("none").value(Primary::Option(None)),
             's' => preceded(
                 keyword("some"),
-                paren.spanned().map(|expr| Primary::Option(Some(Box::new(expr)))),
+                paren.map(|expr| Primary::Option(Some(Box::new(expr)))),
             ).cut(),
             _ => fail,
         },
@@ -161,9 +161,14 @@ pub fn expr_index(input: &mut Input) -> ModalResult<Spanned<Expr>> {
     )
     .parse_next(input)
 }
-pub fn expr_cast(input: &mut Input) -> ModalResult<Spanned<AstType>> {
-    trace("expr_cast", preceded(("as", space0), ast_type.spanned()))
-        .parse_next(input)
+pub fn expr_cast(input: &mut Input) -> ModalResult<(Span, Spanned<AstType>)> {
+    trace("expr_cast", |input: &mut Input| {
+        let span = "as".span().parse_next(input)?;
+        let _ = space0.parse_next(input)?;
+        let ast_type = ast_type.spanned().parse_next(input)?;
+        Ok((span, ast_type))
+    })
+    .parse_next(input)
 }
 pub fn ast_type(input: &mut Input) -> ModalResult<AstType> {
     use AstType::*;
@@ -191,12 +196,9 @@ pub fn ast_type(input: &mut Input) -> ModalResult<AstType> {
     .parse_next(input)
 }
 pub fn expr(input: &mut Input) -> ModalResult<Expr> {
-    trace("expr", |input: &mut Input| {
-        expr_pratt(input, 0).map(|expr| expr.inner)
-    })
-    .parse_next(input)
+    trace("expr", |input: &mut Input| expr_pratt(input, 0)).parse_next(input)
 }
-fn expr_pratt(input: &mut Input, min_power: i32) -> ModalResult<Spanned<Expr>> {
+fn expr_pratt(input: &mut Input, min_power: i32) -> ModalResult<Expr> {
     // 前置演算子 or 値
     let mut lhs =
         if let Some(prefix) = opt(expr_prefix.spanned()).parse_next(input)? {
@@ -209,8 +211,8 @@ fn expr_pratt(input: &mut Input, min_power: i32) -> ModalResult<Spanned<Expr>> {
             // (expr) の括弧を剥がず
             // エラーなどは中身に対して行う
             match primary.inner {
-                Primary::Paren(expr) => Spanned::new(primary.span, expr.inner),
-                _ => Spanned::new(primary.span.clone(), Expr::Primary(primary)),
+                Primary::Paren(expr) => *expr,
+                _ => Expr::Primary(primary),
             }
         };
 
@@ -255,24 +257,16 @@ fn expr_pratt(input: &mut Input, min_power: i32) -> ModalResult<Spanned<Expr>> {
                 input.reset(&checkpoint);
                 break;
             }
-            lhs = Spanned::new(
-                mix_span(&lhs.span, &index.span),
-                Expr::Index(Box::new(lhs), Box::new(index)),
-            );
-
+            lhs = Expr::Index(Box::new(lhs), Box::new(index));
             continue;
         }
-        if let Some(ast_type) = opt(expr_cast).parse_next(input)? {
+        if let Some((span, ast_type)) = opt(expr_cast).parse_next(input)? {
             let power = CAST_POWER;
             if power < min_power {
                 input.reset(&checkpoint);
                 break;
             }
-            lhs = Spanned::new(
-                mix_span(&lhs.span, &ast_type.span),
-                Expr::Cast(Box::new(lhs), ast_type),
-            );
-
+            lhs = Expr::Cast(Box::new(lhs), span, ast_type);
             continue;
         }
 

@@ -110,6 +110,24 @@ pub enum Value {
     Option(Option<Box<Value>>),
     Unit,
 }
+impl Value {
+    pub fn get_type(&self) -> Type {
+        use Value::*;
+        match self {
+            String(_) => Type::String,
+            Int(_) => Type::Int,
+            Float(_) => Type::Float,
+            Bool(_) => Type::Bool,
+            Array(v) => Type::Array(Box::new(
+                v.first().map_or(Type::Unknown, Value::get_type),
+            )),
+            Option(o) => Type::Option(Box::new(
+                o.as_deref().map_or(Type::Unknown, Value::get_type),
+            )),
+            Unit => Type::Unit,
+        }
+    }
+}
 #[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum Type {
     String,
@@ -119,8 +137,22 @@ pub enum Type {
     Array(Box<Type>),
     Option(Box<Type>),
     Unit,
-    #[allow(unused)]
     Unknown,
+}
+impl std::fmt::Display for Type {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use Type::*;
+        match self {
+            String => write!(f, "string"),
+            Int => write!(f, "int"),
+            Float => write!(f, "float"),
+            Bool => write!(f, "bool"),
+            Array(t) => write!(f, "array<{t}>"),
+            Option(t) => write!(f, "option<{t}>"),
+            Unit => write!(f, "unit"),
+            Unknown => write!(f, "_"),
+        }
+    }
 }
 
 macro_rules! impl_from_value {
@@ -146,7 +178,7 @@ impl<T: Into<Value>> From<Vec<T>> for Value {
 }
 impl<T: Into<Value>> From<Option<T>> for Value {
     fn from(value: Option<T>) -> Self {
-        Value::Option(value.map(|i| Box::new(i.into())))
+        Value::Option(value.map(|v| Box::new(v.into())))
     }
 }
 impl From<()> for Value {

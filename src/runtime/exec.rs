@@ -11,7 +11,7 @@ use std::fmt::Display;
 use std::io::Write;
 use std::process::Stdio;
 use std::thread::JoinHandle;
-use std::{ffi::OsString, io::Error as IoError, path::PathBuf};
+use std::{io::Error as IoError, path::PathBuf};
 
 type Result<T> = ::std::result::Result<T, Error>;
 type SpannedResult<T> = ::std::result::Result<T, SpannedError<Error>>;
@@ -153,22 +153,22 @@ fn execute_statement(
         EnvAssign(env_assign) => {
             let name = &env_assign.name;
             let value_span = env_assign.value.span.clone();
-            let value = eval_expr(&env_assign.value, env)?;
+            let value = eval_expr(&env_assign.value.inner, env)?;
             match value {
                 Value::String(value) => {
                     // シングルスレッドでのみ環境変数を書き換えているので安全
                     unsafe { std::env::set_var(name.as_ref(), value) };
                 }
-                Value::Option(Some(value))
-                    if matches!(*value, Value::String(_)) =>
-                {
-                    let Value::String(value) = *value
-                    else {
-                        unreachable!()
-                    };
-                    // シングルスレッドでのみ環境変数を書き換えているので安全
-                    unsafe { std::env::set_var(name.as_ref(), value) };
-                }
+                Value::Option(Some(value)) => match *value {
+                    Value::String(value) => {
+                        // シングルスレッドでのみ環境変数を書き換えているので安全
+                        unsafe { std::env::set_var(name.as_ref(), value) };
+                    }
+                    _ => {
+                        return Err(Error::InvalidEnvValueType)
+                            .with_span(&value_span);
+                    }
+                },
                 Value::Option(None) => {
                     // シングルスレッドでのみ環境変数を書き換えているので安全
                     unsafe { std::env::remove_var(name.as_ref()) };
@@ -289,7 +289,7 @@ impl ResolvedCommand {
             .map(|temp_env| {
                 let (env_var, env_val) = temp_env.as_ref();
                 let span = env_val.span.clone();
-                let Value::String(env_val) = eval_expr(env_val, env)?
+                let Value::String(env_val) = eval_expr(&env_val.inner, env)?
                 else {
                     return Err(Error::InvalidTempEnvValueType)
                         .with_span(&span);
@@ -655,12 +655,12 @@ fn find_executable(name: &str) -> Option<PathBuf> {
 }
 
 #[cfg(windows)]
-fn get_pathext() -> Vec<OsString> {
+fn get_pathext() -> Vec<std::ffi::OsString> {
     // var_osを使用するとより正確
     std::env::var("PATHEXT")
         .unwrap_or(".COM;.EXE;.BAT;.CMD".to_string())
         .split(';')
-        .map(|s| OsString::from(s.trim_start_matches('.')))
+        .map(|s| std::ffi::OsString::from(s.trim_start_matches('.')))
         .collect()
 }
 fn get_path() -> Vec<PathBuf> {

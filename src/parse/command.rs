@@ -164,10 +164,7 @@ pub fn command_part(input: &mut Input) -> ModalResult<CommandPart> {
     use CommandPart::*;
     trace(
         "command_part",
-        alt((
-            simple_expr.spanned().map(SimpleExpr),
-            unquoted_string.map(Unquoted),
-        )),
+        alt((simple_expr.map(SimpleExpr), unquoted_string.map(Unquoted))),
     )
     .parse_next(input)
 }

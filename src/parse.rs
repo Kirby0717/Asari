@@ -28,10 +28,6 @@ use winnow::{
 pub type Input<'i> = LocatingSlice<&'i str>;
 pub type Span = std::ops::Range<usize>;
 
-fn mix_span(a: &Span, b: &Span) -> Span {
-    a.start.min(b.start)..a.end.max(b.end)
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Spanned<T> {
     pub span: Span,
@@ -61,53 +57,48 @@ impl<T: PartialEq> PartialEq for Spanned<T> {
         self.inner.eq(&other.inner)
     }
 }
-impl<T: PartialOrd> PartialOrd for Spanned<T> {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.inner.partial_cmp(&other.inner)
-    }
-}
 impl<T: std::fmt::Display> std::fmt::Display for Spanned<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.inner.fmt(f)
     }
 }
 
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CommandLine {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub statements: Vec<Spanned<Statement>>,
     #[serde(default, skip)]
     pub comment: Option<Spanned<String>>,
 }
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Statement {
     ShellCommand(ShellCommand),
     Pipeline(Pipeline),
     EnvAssign(EnvAssign),
 }
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ShellCommand {
     pub kind: ShellCommandKind,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<Spanned<CommandPart>>,
 }
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct EnvAssign {
     pub name: Spanned<String>,
     pub value: Spanned<Expr>,
 }
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Pipeline {
     pub first: Spanned<Command>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rest: Vec<(Spanned<Pipe>, Spanned<Command>)>,
 }
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Pipe {
     Stdout,       // |   stdoutのみ
     StdoutStderr, // |&  stdout + stderr
 }
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Command {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub temp_envs: Vec<Spanned<(Spanned<String>, Spanned<Expr>)>>,
@@ -117,44 +108,53 @@ pub struct Command {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub redirects: Vec<Spanned<Redirect>>,
 }
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Redirect {
     Input(InputRedirect),
     Output(((OutputRedirect, OutputMode), Spanned<CommandPart>)),
     Merge(Spanned<MergeRedirect>),
 }
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum InputRedirect {
     File(Spanned<CommandPart>),       // <    file
     HereDoc(Spanned<String>),         // <<   EOF ... EOF
     HereString(Spanned<CommandPart>), // <<< "string"
 }
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum OutputRedirect {
     Stdout, // >  >>
     Stderr, // 2> 2>>
     Both,   // &> &>>
 }
 
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum OutputMode {
     Truncate, // >  2>  &>
     Append,   // >> 2>> &>>
 }
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum MergeRedirect {
     StderrToStdout, // 2>&1
     StdoutToStderr, // 1>&2
 }
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum CommandPart {
     Unquoted(String),
-    SimpleExpr(Spanned<Expr>),
+    SimpleExpr(Expr),
 }
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ExprPrefix {
     Not, // !
     Neg, // -
+}
+impl std::fmt::Display for ExprPrefix {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use ExprPrefix::*;
+        match self {
+            Not => write!(f, "!"),
+            Neg => write!(f, "-"),
+        }
+    }
 }
 impl ExprPrefix {
     fn power(&self) -> i32 {
@@ -166,15 +166,11 @@ impl ExprPrefix {
     }
 }
 impl Spanned<ExprPrefix> {
-    fn apply(self, expr: Spanned<Expr>) -> Spanned<Expr> {
-        let expr = Box::new(expr);
-        Spanned::new(
-            mix_span(&self.span, &expr.span),
-            Expr::Prefix(expr, self.inner),
-        )
+    fn apply(self, expr: Expr) -> Expr {
+        Expr::Prefix(self, Box::new(expr))
     }
 }
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ExprInfix {
     UnwrapOr,     // ^
     Add,          // +
@@ -190,6 +186,27 @@ pub enum ExprInfix {
     GreaterEqual, // >=
     And,          // &&
     Or,           // ||
+}
+impl std::fmt::Display for ExprInfix {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use ExprInfix::*;
+        match self {
+            UnwrapOr => write!(f, "^"),
+            Add => write!(f, "+"),
+            Sub => write!(f, "-"),
+            Mul => write!(f, "*"),
+            Div => write!(f, "/"),
+            Rem => write!(f, "%"),
+            Equal => write!(f, "=="),
+            NotEqual => write!(f, "!="),
+            Less => write!(f, "<"),
+            LessEqual => write!(f, "<="),
+            Greater => write!(f, ">"),
+            GreaterEqual => write!(f, ">="),
+            And => write!(f, "&&"),
+            Or => write!(f, "||"),
+        }
+    }
 }
 impl ExprInfix {
     #[rustfmt::skip]
@@ -216,25 +233,26 @@ impl ExprInfix {
     }
 }
 impl Spanned<ExprInfix> {
-    fn apply(
-        self,
-        l_expr: Spanned<Expr>,
-        r_expr: Spanned<Expr>,
-    ) -> Spanned<Expr> {
-        let l_expr = Box::new(l_expr);
-        let r_expr = Box::new(r_expr);
-        Spanned::new(
-            mix_span(&l_expr.span, &r_expr.span),
-            Expr::Infix(l_expr, r_expr, self.inner),
-        )
+    fn apply(self, l_expr: Expr, r_expr: Expr) -> Expr {
+        Expr::Infix(Box::new(l_expr), self, Box::new(r_expr))
     }
 }
-type ExprNode = Box<Spanned<Expr>>;
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+type ExprNode = Box<Expr>;
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ExprPostfix {
     Unwrap, // !
     IsSome, // ?
     Length, // @
+}
+impl std::fmt::Display for ExprPostfix {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use ExprPostfix::*;
+        match self {
+            Unwrap => write!(f, "!"),
+            IsSome => write!(f, "?"),
+            Length => write!(f, "@"),
+        }
+    }
 }
 impl ExprPostfix {
     fn power(&self) -> i32 {
@@ -249,46 +267,42 @@ impl ExprPostfix {
 const INDEX_POWER: i32 = 10;
 const CAST_POWER: i32 = 9;
 impl Spanned<ExprPostfix> {
-    fn apply(self, expr: Spanned<Expr>) -> Spanned<Expr> {
-        let expr = Box::new(expr);
-        Spanned::new(
-            mix_span(&expr.span, &self.span),
-            Expr::Postfix(expr, self.inner),
-        )
+    fn apply(self, expr: Expr) -> Expr {
+        Expr::Postfix(Box::new(expr), self)
     }
 }
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Expr {
     Primary(Spanned<Primary>),
-    Prefix(ExprNode, ExprPrefix),
-    Infix(ExprNode, ExprNode, ExprInfix),
-    Postfix(ExprNode, ExprPostfix),
-    Index(ExprNode, ExprNode),        // [expr]
-    Cast(ExprNode, Spanned<AstType>), // as type
+    Prefix(Spanned<ExprPrefix>, ExprNode),
+    Infix(ExprNode, Spanned<ExprInfix>, ExprNode),
+    Postfix(ExprNode, Spanned<ExprPostfix>),
+    Index(ExprNode, Box<Spanned<Expr>>), // [expr]
+    Cast(ExprNode, Span, Spanned<AstType>), // as type
 }
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Primary {
     String(String),                          // "abc", 'abc', r"abc"
     PathString(String),                      // p"abc"
     SpecialVar(SpecialVar),                  // $?, $$, $!, $@
     EnvVar(String),                          // $abc
     ShellVar(String),                        // @abc
-    Paren(Box<Spanned<Expr>>),               // (expr)
+    Paren(Box<Expr>),                        // (expr)
     CommandSubst(Box<Spanned<CommandLine>>), // $(command args...)
-    Array(Vec<Spanned<Expr>>),               // [e1, e2, ... , ek]
+    Array(Vec<Expr>),                        // [e1, e2, ... , ek]
     Bool(bool),                              // true, false
     Int(i64),                                // 123
     Float(f64),                              // 12.3
-    Option(Option<Box<Spanned<Expr>>>),      // none, some(expr)
+    Option(Option<Box<Expr>>),               // none, some(expr)
     Unit,                                    // ()
 }
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum AstType {
     Unknown,                                 // _
     Normal(String),                          // int float bool string ...
     Generics(String, Box<Spanned<AstType>>), // array option ...
 }
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum SpecialVar {
     ExitStatus,    // $?
     Pid,           // $$
@@ -309,9 +323,6 @@ pub fn parse_shell_command(
 
 fn space0<'a>(input: &mut Input<'a>) -> ModalResult<&'a str> {
     trace("space0", take_while(0.., char::is_whitespace)).parse_next(input)
-}
-fn space1<'a>(input: &mut Input<'a>) -> ModalResult<&'a str> {
-    trace("space1", take_while(1.., char::is_whitespace)).parse_next(input)
 }
 fn ident(input: &mut Input) -> ModalResult<String> {
     use unicode_ident::*;
@@ -412,14 +423,14 @@ fn subst(input: &mut Input) -> ModalResult<CommandLine> {
 
     Ok(command_line)
 }
-fn array(input: &mut Input) -> ModalResult<Vec<Spanned<Expr>>> {
+fn array(input: &mut Input) -> ModalResult<Vec<Expr>> {
     let begin = input.current_token_start();
     let _ = '['.parse_next(input)?;
     let end = input.previous_token_end();
 
     let _ = space0.parse_next(input)?;
 
-    let array = separated(0.., expr.spanned(), delimited(space0, ',', space0))
+    let array = separated(0.., expr, delimited(space0, ',', space0))
         .parse_next(input)?;
 
     let _ = space0.parse_next(input)?;

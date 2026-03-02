@@ -15,7 +15,7 @@ pub fn simple_expr_primary(input: &mut Input) -> ModalResult<Primary> {
             '@' => shell_var.cut().map(Primary::ShellVar),
             '(' => alt((
                 unit.value(Primary::Unit),
-                paren.spanned().map(|expr| Primary::Paren(Box::new(expr)))
+                paren.map(|expr| Primary::Paren(Box::new(expr)))
             )).cut(),
             'r' => raw_string.map(Primary::String),
             'p' => path_string.map(Primary::PathString),
@@ -58,13 +58,12 @@ pub fn simple_expr_infix(input: &mut Input) -> ModalResult<ExprInfix> {
 }
 #[inline(always)]
 pub fn simple_expr(input: &mut Input) -> ModalResult<Expr> {
-    trace("simple_expr", simple_expr_pratt.map(|expr| expr.inner))
-        .parse_next(input)
+    trace("simple_expr", simple_expr_pratt).parse_next(input)
 }
-pub fn simple_expr_pratt(input: &mut Input) -> ModalResult<Spanned<Expr>> {
+pub fn simple_expr_pratt(input: &mut Input) -> ModalResult<Expr> {
     // 値
     let primary = simple_expr_primary.spanned().parse_next(input)?;
-    let mut lhs = Spanned::new(primary.span.clone(), Expr::Primary(primary));
+    let mut lhs = Expr::Primary(primary);
 
     loop {
         // 後置演算子
@@ -77,11 +76,7 @@ pub fn simple_expr_pratt(input: &mut Input) -> ModalResult<Spanned<Expr>> {
 
         // Index
         if let Some(index) = opt(simple_expr_index).parse_next(input)? {
-            lhs = Spanned::new(
-                mix_span(&lhs.span, &index.span),
-                Expr::Index(Box::new(lhs), Box::new(index)),
-            );
-
+            lhs = Expr::Index(Box::new(lhs), Box::new(index));
             continue;
         }
 

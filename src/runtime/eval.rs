@@ -15,7 +15,7 @@ type SpannedResult<T> = ::std::result::Result<T, SpannedError<Error>>;
 #[derive(Debug)]
 pub enum Error {
     Subst(SubstError),
-    TypeMismatch,
+    Apply(ApplyError),
     OverFlow,
     UnwrapNone,
     UnknownShellVar(String),
@@ -31,7 +31,7 @@ impl Display for Error {
         use Error::*;
         match self {
             Subst(e) => e.fmt(f),
-            TypeMismatch => write!(f, "型が違います"),
+            Apply(e) => write!(f, "無効な演算 {e} です"),
             OverFlow => write!(f, "整数がオーバーフローしました"),
             UnwrapNone => write!(f, "noneをunwrapしました"),
             UnknownShellVar(s) => write!(f, "不明なシェル変数@{s}です"),
@@ -48,6 +48,32 @@ impl From<SubstError> for Error {
         Error::Subst(value)
     }
 }
+impl From<ApplyError> for Error {
+    fn from(value: ApplyError) -> Self {
+        Error::Apply(value)
+    }
+}
+#[derive(Debug)]
+pub enum ApplyError {
+    Prefix(ExprPrefix, Type),
+    Infix(Type, ExprInfix, Type),
+    Postfix(Type, ExprPostfix),
+    Index(Type, Type),
+    Cast(Type, Type),
+}
+impl std::error::Error for ApplyError {}
+impl Display for ApplyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use ApplyError::*;
+        match self {
+            Prefix(prefix, t) => write!(f, "{prefix} {t}"),
+            Infix(t1, infix, t2) => write!(f, "{t1} {infix} {t2}"),
+            Postfix(t, postfix) => write!(f, "{t} {postfix}"),
+            Index(v, i) => write!(f, "{v}[{i}]"),
+            Cast(a, b) => write!(f, "{a} as {b}"),
+        }
+    }
+}
 
 pub fn eval_command_part(
     Spanned {
@@ -58,23 +84,26 @@ pub fn eval_command_part(
 ) -> SpannedResult<Value> {
     Ok(match command_part {
         CommandPart::Unquoted(string) => {
-            tilde_expand(&string).with_span(span)?.into()
+            tilde_expand(string).with_span(span)?.into()
         }
         CommandPart::SimpleExpr(expr) => eval_expr(expr, env)?,
     })
 }
-pub fn eval_expr(
-    Spanned { span, inner: expr }: &Spanned<Expr>,
-    env: &mut Context,
-) -> SpannedResult<Value> {
+pub fn eval_expr(expr: &Expr, env: &mut Context) -> SpannedResult<Value> {
     use Expr::*;
     Ok(match expr {
         Primary(primary) => eval_primary(primary, env)?,
-        Prefix(expr, prefix) => {
+        Prefix(
+            Spanned {
+                span,
+                inner: prefix,
+            },
+            expr,
+        ) => {
             let value = eval_expr(expr, env)?;
             apply_prefix(value, prefix).with_span(span)?
         }
-        Infix(expr1, expr2, infix) => {
+        Infix(expr1, Spanned { span, inner: infix }, expr2) => {
             use ExprInfix::*;
             if matches!(infix, And | Or | UnwrapOr) {
                 eval_infix_lazy(span, expr1, expr2, infix, env)?
@@ -85,16 +114,26 @@ pub fn eval_expr(
                 apply_infix(value1, value2, infix).with_span(span)?
             }
         }
-        Postfix(expr, postfix) => {
+        Postfix(
+            expr,
+            Spanned {
+                span,
+                inner: postfix,
+            },
+        ) => {
             let value = eval_expr(expr, env)?;
             apply_postfix(value, postfix).with_span(span)?
         }
         Index(expr_v, expr_i) => {
+            let Spanned {
+                span,
+                inner: expr_i,
+            } = expr_i.as_ref();
             let value = eval_expr(expr_v, env)?;
             let index = eval_expr(expr_i, env)?;
             apply_index(value, index).with_span(span)?
         }
-        Cast(expr, ast_type) => {
+        Cast(expr, span, ast_type) => {
             let value = eval_expr(expr, env)?;
             let r#type = eval_ast_type(ast_type)?;
             apply_cast(value, r#type).with_span(span)?
@@ -150,8 +189,8 @@ fn eval_primary(
 }
 fn eval_infix_lazy(
     span: &Span,
-    expr1: &Spanned<Expr>,
-    expr2: &Spanned<Expr>,
+    expr1: &Expr,
+    expr2: &Expr,
     infix: &ExprInfix,
     env: &mut Context,
 ) -> SpannedResult<Value> {
@@ -165,8 +204,15 @@ fn eval_infix_lazy(
         (Bool(false), Or) => eval_expr(expr2, env)?,
         (Option(Some(v)), UnwrapOr) => *v,
         (Option(None), UnwrapOr) => eval_expr(expr2, env)?,
-        _ => {
-            return Err(Error::TypeMismatch).with_span(span);
+        (value1, infix) => {
+            let value2 = eval_expr(expr2, env)?;
+            return Err(ApplyError::Infix(
+                value1.get_type(),
+                infix.clone(),
+                value2.get_type(),
+            )
+            .into())
+            .with_span(span);
         }
     })
 }
@@ -274,7 +320,13 @@ fn apply_prefix(value: Value, prefix: &ExprPrefix) -> Result<Value> {
             [ Int(a) ] { Neg checked_neg }
         }
         @extra:
-        _ => return Err(Error::TypeMismatch),
+        (value, prefix) => {
+            return Err(ApplyError::Prefix(
+                prefix.clone(),
+                value.get_type(),
+            )
+            .into());
+        }
     }
 }
 fn apply_infix(
@@ -314,7 +366,14 @@ fn apply_infix(
         }
         @extra:
         (String(a), String(b), Add) => (a + &b).into(),
-        _ => return Err(Error::TypeMismatch),
+        (value1, value2, infix) => {
+            return Err(ApplyError::Infix(
+                value1.get_type(),
+                infix.clone(),
+                value2.get_type(),
+            )
+            .into());
+        }
     }
 }
 fn apply_postfix(value: Value, postfix: &ExprPostfix) -> Result<Value> {
@@ -335,7 +394,11 @@ fn apply_postfix(value: Value, postfix: &ExprPostfix) -> Result<Value> {
         (Option(a), IsSome) => a.is_some().into(),
         (String(s), Length) => usize_into_value(s.chars().count())?,
         (Array(v), Length) => usize_into_value(v.len())?,
-        _ => return Err(Error::TypeMismatch),
+        (value, postfix) => {
+            return Err(
+                ApplyError::Postfix(value.get_type(), postfix.clone()).into()
+            );
+        }
     })
 }
 
@@ -353,7 +416,7 @@ fn resolve_special_var(
 }
 fn apply_index(value: Value, index: Value) -> Result<Value> {
     use Value::*;
-    if let Array(v) = value
+    if let Array(v) = &value
         && let Int(index) = index
     {
         let index = if index >= 0 {
@@ -372,7 +435,7 @@ fn apply_index(value: Value, index: Value) -> Result<Value> {
         Ok(index.and_then(|index| v.get(index).cloned()).into())
     }
     else {
-        Err(Error::TypeMismatch).into()
+        Err(ApplyError::Index(value.get_type(), index.get_type()).into())
     }
 }
 fn apply_cast(value: Value, r#type: Type) -> Result<Value> {
@@ -416,7 +479,7 @@ fn apply_cast(value: Value, r#type: Type) -> Result<Value> {
             o.map(|v| apply_cast(*v, *t)).transpose()?.into()
         }
         (Unit, Type::Unit) => ().into(),
-        _ => return Err(FailCast),
+        (a, b) => return Err(ApplyError::Cast(a.get_type(), b).into()),
     })
 }
 fn resolve_path_string(path_string: &str, _env: &mut Context) -> Result<Value> {
