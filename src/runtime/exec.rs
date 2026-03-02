@@ -1,6 +1,6 @@
 use super::eval::{Error as EvalError, eval_command_part, eval_expr};
 use super::shell_command::Error as ShellCommandError;
-use super::{Context, SpannedError, Value, status_into_i32};
+use super::{Context, SpannedError, Type, Value, status_into_i32};
 use crate::parse::{
     Command, CommandLine, InputRedirect, MergeRedirect, OutputMode,
     OutputRedirect, Pipe, Pipeline, Redirect, Span, Spanned, Statement,
@@ -21,15 +21,15 @@ pub enum Error {
     ShellCommand(ShellCommandError),
     EmptyCommand,
     NotFoundCommand(String),
-    InvalidCommandNameType,
+    InvalidCommandNameType(Type),
     Spawn(IoError),
     Pipe(IoError),
     Redirect(RedirectError),
-    InvalidEnvValueType,
-    InvalidTempEnvValueType,
+    InvalidEnvValueType(Type),
+    InvalidTempEnvValueType(Type),
 }
 impl Error {
-    pub fn is_exit(&self) -> Option<i32> {
+    pub fn exit_code(&self) -> Option<i32> {
         match self {
             Error::ShellCommand(ShellCommandError::Exit(code)) => Some(*code),
             _ => None,
@@ -47,17 +47,17 @@ impl Display for Error {
             NotFoundCommand(name) => {
                 write!(f, "コマンド{name}が見つかりませんでした")
             }
-            InvalidCommandNameType => {
-                write!(f, "コマンド名に文字列以外が指定されました")
+            InvalidCommandNameType(t) => {
+                write!(f, "コマンド名にstringではなく{t}が指定されました")
             }
             Spawn(e) => write!(f, "コマンドの実行に失敗しました : {e}"),
             Pipe(e) => write!(f, "パイプエラー : {e}"),
             Redirect(e) => write!(f, "リダイレクトエラー : {e}"),
-            InvalidEnvValueType => {
-                write!(f, "環境変数に代入する値が文字列ではありません")
+            InvalidEnvValueType(t) => {
+                write!(f, "環境変数に代入する値がstringではなく{t}です")
             }
-            InvalidTempEnvValueType => {
-                write!(f, "一時変数に代入する値が文字列ではありません")
+            InvalidTempEnvValueType(t) => {
+                write!(f, "一時変数に代入する値がstringではなく{t}です")
             }
         }
     }
@@ -115,17 +115,14 @@ pub fn value_to_args(value: &Value) -> Vec<String> {
 pub fn execute_command_line(command_line: &CommandLine, env: &mut Context) {
     for statement in &command_line.statements {
         // Exit以外のエラーは無視してエラー出力のみ行う
-        match execute_statement(statement, env) {
-            Err(e) => {
-                if let Some(code) = e.kind.is_exit() {
-                    std::process::exit(code);
-                }
-                else {
-                    let display = e.display(&env.current_input);
-                    eprintln!("{display}");
-                }
+        if let Err(e) = execute_statement(statement, env) {
+            if let Some(code) = e.kind.exit_code() {
+                std::process::exit(code);
             }
-            Ok(_) => {}
+            else {
+                let display = e.display(&env.current_input);
+                eprintln!("{display}");
+            }
         }
     }
 }
@@ -165,8 +162,10 @@ fn execute_statement(
                         unsafe { std::env::set_var(name.as_ref(), value) };
                     }
                     _ => {
-                        return Err(Error::InvalidEnvValueType)
-                            .with_span(&value_span);
+                        return Err(Error::InvalidEnvValueType(
+                            value.get_type(),
+                        ))
+                        .with_span(&value_span);
                     }
                 },
                 Value::Option(None) => {
@@ -174,7 +173,7 @@ fn execute_statement(
                     unsafe { std::env::remove_var(name.as_ref()) };
                 }
                 _ => {
-                    return Err(Error::InvalidEnvValueType)
+                    return Err(Error::InvalidEnvValueType(value.get_type()))
                         .with_span(&value_span);
                 }
             }
@@ -272,7 +271,8 @@ impl ResolvedCommand {
         let name = eval_command_part(&command.name, env)?;
         let Value::String(name) = name
         else {
-            return Err(Error::InvalidCommandNameType).with_span(&name_span);
+            return Err(Error::InvalidCommandNameType(name.get_type()))
+                .with_span(&name_span);
         };
         if name.is_empty() {
             return Err(Error::EmptyCommand).with_span(&name_span);
@@ -289,10 +289,13 @@ impl ResolvedCommand {
             .map(|temp_env| {
                 let (env_var, env_val) = temp_env.as_ref();
                 let span = env_val.span.clone();
-                let Value::String(env_val) = eval_expr(&env_val.inner, env)?
+                let env_val = eval_expr(&env_val.inner, env)?;
+                let Value::String(env_val) = env_val
                 else {
-                    return Err(Error::InvalidTempEnvValueType)
-                        .with_span(&span);
+                    return Err(Error::InvalidTempEnvValueType(
+                        env_val.get_type(),
+                    ))
+                    .with_span(&span);
                 };
                 Ok((env_var.as_ref().clone(), env_val))
             })
@@ -355,6 +358,8 @@ impl StdioOutputConfig {
         Ok(match self {
             Inherit => Inherit,
             File(file) => {
+                // ファイルディスクリプタの複製失敗は分かりづらいので
+                // ファイルを開くのに失敗したエラーに置き換える
                 File(file.try_clone().map_err(RedirectError::FailOpenFile)?)
             }
             PipeWriter(writer) => {
@@ -389,7 +394,7 @@ fn resolve_pipeline(
     // 初期設定
     commands_with_redirects.push((
         Spanned::new(first_span.clone(), ResolvedCommand::new(first, env)?),
-        first.redirects.clone(),
+        &first.redirects,
     ));
     for (
         pipe,
@@ -417,10 +422,8 @@ fn resolve_pipeline(
         left.inner.stdout = writer;
         right.stdin = reader;
 
-        commands_with_redirects.push((
-            Spanned::new(span.clone(), right),
-            command.redirects.clone(),
-        ));
+        commands_with_redirects
+            .push((Spanned::new(span.clone(), right), &command.redirects));
     }
 
     // リダイレクトの反映
@@ -441,7 +444,7 @@ fn resolve_pipeline(
 }
 fn apply_redirect(
     resolved_command: &mut ResolvedCommand,
-    redirects: Vec<Spanned<Redirect>>,
+    redirects: &[Spanned<Redirect>],
     env: &mut Context,
 ) -> SpannedResult<()> {
     for Spanned {
@@ -454,7 +457,7 @@ fn apply_redirect(
                 apply_input_redirect(
                     resolved_command,
                     input_redirect,
-                    &redirect_span,
+                    redirect_span,
                     env,
                 )?;
             }
@@ -464,7 +467,7 @@ fn apply_redirect(
             )) => {
                 // ファイル名の評価
                 let file_path_span = file_expression.span.clone();
-                let value = eval_command_part(&file_expression, env)?;
+                let value = eval_command_part(file_expression, env)?;
                 let Value::String(file_path) = value
                 else {
                     return Err(RedirectError::InvalidFileNameType.into())
@@ -484,7 +487,7 @@ fn apply_redirect(
                 inner: merge_redirect,
             }) => {
                 apply_merge_redirect(resolved_command, merge_redirect)
-                    .with_span(&span)?;
+                    .with_span(span)?;
             }
         }
     }
@@ -492,7 +495,7 @@ fn apply_redirect(
 }
 fn apply_input_redirect(
     resolved_command: &mut ResolvedCommand,
-    input_redirect: InputRedirect,
+    input_redirect: &InputRedirect,
     redirect_span: &Span,
     env: &mut Context,
 ) -> SpannedResult<()> {
@@ -502,7 +505,7 @@ fn apply_input_redirect(
         File(file) => {
             // ファイル名の評価
             let file_span = file.span.clone();
-            let value = eval_command_part(&file, env)?;
+            let value = eval_command_part(file, env)?;
             let Value::String(path) = value
             else {
                 return Err(RedirectError::InvalidFileNameType.into())
@@ -526,7 +529,7 @@ fn apply_input_redirect(
         // 文字列を評価してそのまま渡す
         HereString(value) => {
             let value_span = value.span.clone();
-            let value = eval_command_part(&value, env)?;
+            let value = eval_command_part(value, env)?;
             let Value::String(s) = value
             else {
                 return Err(RedirectError::InvalidHereInputType.into())
@@ -541,8 +544,8 @@ fn apply_input_redirect(
 }
 fn apply_output_redirect(
     resolved_command: &mut ResolvedCommand,
-    output_redirect: OutputRedirect,
-    output_mode: OutputMode,
+    output_redirect: &OutputRedirect,
+    output_mode: &OutputMode,
     file_path: &str,
 ) -> Result<()> {
     use OutputMode::*;
@@ -578,7 +581,7 @@ fn apply_output_redirect(
 }
 fn apply_merge_redirect(
     resolved_command: &mut ResolvedCommand,
-    merge_redirect: MergeRedirect,
+    merge_redirect: &MergeRedirect,
 ) -> Result<()> {
     use MergeRedirect::*;
     match merge_redirect {

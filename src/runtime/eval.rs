@@ -20,7 +20,7 @@ pub enum Error {
     UnwrapNone,
     UnknownShellVar(String),
     UnknownType(String),
-    FailCast,
+    FailCast(Type, Type),
     NoHomeDir,
     InvalidUtf8Path,
     InvalidGlobPattern,
@@ -36,7 +36,9 @@ impl Display for Error {
             UnwrapNone => write!(f, "noneをunwrapしました"),
             UnknownShellVar(s) => write!(f, "不明なシェル変数@{s}です"),
             UnknownType(name) => write!(f, "不明な型名{name}です"),
-            FailCast => write!(f, "型変換に失敗しました"),
+            FailCast(t1, t2) => {
+                write!(f, "{t1}から{t2}への型変換に失敗しました")
+            }
             NoHomeDir => write!(f, "ホームディレクトリの取得に失敗しました"),
             InvalidUtf8Path => write!(f, "パスがUTF-8ではありません"),
             InvalidGlobPattern => write!(f, "不正なglobパターンです"),
@@ -206,12 +208,11 @@ fn eval_infix_lazy(
         (Option(None), UnwrapOr) => eval_expr(expr2, env)?,
         (value1, infix) => {
             let value2 = eval_expr(expr2, env)?;
-            return Err(ApplyError::Infix(
+            return Err(Error::Apply(ApplyError::Infix(
                 value1.get_type(),
                 infix.clone(),
                 value2.get_type(),
-            )
-            .into())
+            )))
             .with_span(span);
         }
     })
@@ -443,16 +444,18 @@ fn apply_cast(value: Value, r#type: Type) -> Result<Value> {
     use Value::*;
     Ok(match (value, r#type) {
         (String(s), Type::String) => s.clone().into(),
-        (String(s), Type::Int) => {
-            s.parse::<i64>().map_err(|_| FailCast)?.into()
-        }
-        (String(s), Type::Float) => {
-            s.parse::<f64>().map_err(|_| FailCast)?.into()
-        }
+        (String(s), Type::Int) => s
+            .parse::<i64>()
+            .map_err(|_| FailCast(Type::String, Type::Int))?
+            .into(),
+        (String(s), Type::Float) => s
+            .parse::<f64>()
+            .map_err(|_| FailCast(Type::String, Type::Float))?
+            .into(),
         (String(s), Type::Bool) => match s.as_str() {
             "true" => true,
             "false" => false,
-            _ => return Err(FailCast),
+            _ => return Err(FailCast(Type::String, Type::Bool)),
         }
         .into(),
         (Int(a), Type::String) => a.to_string().into(),
@@ -464,7 +467,7 @@ fn apply_cast(value: Value, r#type: Type) -> Result<Value> {
                 (a as i64).into()
             }
             else {
-                return Err(FailCast);
+                return Err(FailCast(Type::Float, Type::Int));
             }
         }
         (Float(a), Type::Float) => a.into(),

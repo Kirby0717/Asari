@@ -31,8 +31,8 @@ impl Shell {
 
 #[derive(Clone, Debug)]
 pub struct SpannedError<E> {
-    kind: E,
-    span: Span,
+    pub kind: E,
+    pub span: Span,
 }
 impl<E> SpannedError<E> {
     pub fn display(&self, input: &str) -> String
@@ -50,7 +50,7 @@ impl<E> SpannedError<E> {
         display
     }
 }
-trait WithSpan<T, E> {
+pub trait WithSpan<T, E> {
     fn with_span(self, span: &Span) -> Result<T, SpannedError<E>>;
 }
 impl<T, E> WithSpan<T, E> for Result<T, E> {
