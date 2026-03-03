@@ -141,6 +141,10 @@ jobs:
         if: matrix.os != 'windows-latest'
         run: |
           strip target/${{ matrix.target }}/release/asari${{ matrix.ext }}
+          for bin_src in src/bin/*.rs; do
+            bin=$(basename "${bin_src}" .rs)
+            strip "target/${{ matrix.target }}/release/${bin}${{ matrix.ext }}"
+          done
 
       - name: 配布用ディレクトリの作成
         shell: bash
@@ -157,6 +161,13 @@ jobs:
 
           # バイナリをコピー
           cp "target/${{ matrix.target }}/release/${BINARY_NAME}${{ matrix.ext }}" "dist/${DIST_DIR}/"
+
+          # ビルトインコマンドをコピー（src/bin/*.rs から自動取得）
+          mkdir -p "dist/${DIST_DIR}/builtin"
+          for bin_src in src/bin/*.rs; do
+            bin=$(basename "${bin_src}" .rs)
+            cp "target/${{ matrix.target }}/release/${bin}${{ matrix.ext }}" "dist/${DIST_DIR}/builtin/"
+          done
 
           # 追加ファイルをコピー
           cp LICENSE-APACHE "dist/${DIST_DIR}/" 2>/dev/null || true
